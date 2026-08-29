@@ -1,0 +1,43 @@
+# Helldivers 2 Hash Cracker
+
+Fast GPU-based hash cracking for Helldivers 2, optimized for file paths.
+
+## Usage
+- `go run . -h` for a list of options
+
+## Pattern language
+### Syntax
+- strings without any special characters are parsed as strings (prefix any special character with `\` to treat it like a non-special character)
+- `<`, `>`: group inner contents together (works like parentheses)
+- `<a><b>` or `a<b>` etc.: concatenate a and b
+- `a|b|c`: a or b or c
+- `[a-z0-9~_-]`, `[^a-z]`: character classes mostly like in regex
+- `...{m,n}`, `...{m}`: repeat expression m-n times (`,n` can be omitted if `m == n`)
+- `...{m,n,s}`, `...{m,s}`: repeat expression m-n times, separated by s (`,n` can be omitted if `m == n` and if `s` doesn't start with a digit)
+- `#{var = ...}`: assign value of to variable `var`
+- `#{var}`: expand value of variable `var`
+- `#{func arg1 arg2 ...}`: call function with arguments `arg1`, `arg2` etc.
+- operator precedences:
+    - `|` binds weakest
+    - concatenation binds stronger than `|`
+    - `{n,m}` (range suffix) binds stronger than concatenation
+    - `ab` is counted as a single string meaning `ab{5}` ≡ `<ab>{5}`, but `<a>b{5}` ≡ `<a><b{5}>`
+    - `<...>`, `#{...}` and `[...]` expressions are not separable
+    - to summarize, the operators precendences from strongest to weakest are:
+        1. range (`...{n,m}`, unary)
+        2. concatenation (e.g. `<...><...>`)
+        3. or (`|`)
+
+### Builtin variable and functions
+- `#{load filename}`: loads pattern from file `filename` and returns it
+- `#{import filename}`: import variables from file `filename` (never returns a value)
+- `#{filter x n}`: limit the or expression `x` to the first `n` elements
+- `#{filter x regex}`: filter the or expression `x` to only those that match `regex`
+
+### Examples
+- `content/#{known-words}{1,3,[_:]}`: `content/` followed by 1-3 known words, separated by `_` or `:`
+
+## License
+Copyright (c) xypwn
+
+This program is licensed under the 3-Clause BSD License (https://opensource.org/license/bsd-3-clause).
