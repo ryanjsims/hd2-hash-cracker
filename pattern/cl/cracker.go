@@ -91,10 +91,10 @@ func NewCracker(device cl.DeviceId, prog pattern.Segment, targetHashes []uint64,
 		return nil, fmt.Errorf("creating kernel: %w", err)
 	}
 	if err := cl.SetKernelArgValues(c.kernel, 0,
-		c.bufs.cl.tries, c.bufs.cl.idxs,
-		c.bufs.cl.strs, c.bufs.cl.strsOffsets, c.bufs.cl.strLens,
-		c.bufs.cl.hashBitmap, c.bufs.cl.targetHashes,
-		c.bufs.cl.matchFound, c.bufs.cl.matches, c.bufs.cl.matchesLens); err != nil {
+		c.bufs.bs.tries.Mem, c.bufs.bs.idxs.Mem,
+		c.bufs.bs.strs.Mem, c.bufs.bs.strsOffsets.Mem, c.bufs.bs.strLens.Mem,
+		c.bufs.bs.hashBitmap.Mem, c.bufs.bs.targetHashes.Mem,
+		c.bufs.bs.matchFound.Mem, c.bufs.bs.matches.Mem, c.bufs.bs.matchesLens.Mem); err != nil {
 		return nil, fmt.Errorf("setting arg values: %w", err)
 	}
 
@@ -132,27 +132,30 @@ func (c *Cracker) TotalIdx() int {
 func (c *Cracker) Dispatch() (matches []string, err error) {
 	// Initialize new buffer values
 	{
-		matchFound := c.bufs.data.matchFound[0] != 0
+		matchFound := c.bufs.bs.matchFound.Items[0] != 0
+		fillTries := true
 
 		done := true
 		for i := range c.bufs.numWorkers {
 			if matchFound && // tries is only valid if a match was found
-				c.bufs.data.tries[i] != 0 {
+				c.bufs.bs.tries.Items[i] != 0 {
 				// Worker stopped early because result
 				// buffer was full.
 				done = false
+				fillTries = false
 				continue
 			}
 			c.idx.Reset()
 			if c.totalIdx > 0 {
 				c.idx.Add(c.prog, c.totalIdx)
 			}
-			readIdx(c.bufs.data.idxs[i*c.bufs.idxLen:], c.prog, c.idx)
+			readIdx(c.bufs.bs.idxs.Items[i*c.bufs.idxLen:], c.prog, c.idx)
 			tries := c.opts.TriesPerWorkerPerDispatch
 			if c.totalIdx+tries > c.prog.Comp {
 				tries = c.prog.Comp - c.totalIdx
+				fillTries = false
 			}
-			c.bufs.data.tries[i] = uint32(tries)
+			c.bufs.bs.tries.Items[i] = uint32(tries)
 			c.totalIdx += tries
 			if tries > 0 {
 				done = false
@@ -161,13 +164,22 @@ func (c *Cracker) Dispatch() (matches []string, err error) {
 		if done {
 			return nil, Done
 		}
-		c.bufs.data.matchFound[0] = 0
+		c.bufs.bs.matchFound.Items[0] = 0
 		//fmt.Println("tries:", c.bufs.data.tries)
 		//fmt.Println("matches:", c.bufs.data.matchesLens)
+		triesFillValue := 0 // read from host buffer (don't just fill)
+		if fillTries {
+			// faster: fill all tries with the same value
+			triesFillValue = c.opts.TriesPerWorkerPerDispatch
+		}
 		if err := c.bufs.write(c.queue,
-			// If no match is found, we know matchLens is
+			// If the tries buffer has the same value every
+			// where, we just fill by pattern instead of
+			// copying byte-by-byte.
+			uint32(triesFillValue),
+			// If no match was found, we know matchLens is
 			// still zero everywhere, and hence there's no
-			// reason to write matchLens.
+			// reason to zero matchLens.
 			matchFound,
 		); err != nil {
 			return nil, fmt.Errorf("writing buffers: %w", err)
@@ -190,19 +202,20 @@ func (c *Cracker) Dispatch() (matches []string, err error) {
 		if err := c.bufs.readMatchFound(c.queue); err != nil {
 			return nil, fmt.Errorf("reading back data: %w", err)
 		}
-		matchFound := c.bufs.data.matchFound[0] != 0
+		matchFound := c.bufs.bs.matchFound.Items[0] != 0
 
 		if matchFound {
 			// We only need to read back additional data if a match was found;
 			// if no match was found, we always know that all tries were
 			// exhausted and matchLens is zero everywhere.
-			if err := c.bufs.read(c.queue); err != nil {
+			if err := c.bufs.readTriesAndMatches(c.queue); err != nil {
 				return nil, fmt.Errorf("reading back data: %w", err)
 			}
 
 			// Match buffers are only valid if a match was found
-			matches = c.bufs.drainMatches()
+			matches = c.bufs.getMatches()
 		}
 	}
+
 	return
 }

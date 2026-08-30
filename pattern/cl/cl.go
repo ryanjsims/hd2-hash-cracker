@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"fmt"
 	"math"
-	"runtime"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -53,30 +52,17 @@ type clBuffers struct {
 	idxLen           int
 	matchBufLen      int
 	maxCandidateLen  int
-	data             struct {
-		pin          runtime.Pinner // we need to keep data pinned to correctly do async reading
-		tries        []uint32
-		idxs         []uint32
-		strs         []byte
-		strsOffsets  []uint32
-		strLens      []uint32
-		hashBitmap   []uint32
-		targetHashes []uint64
-		matchFound   []int32 // [1]bool
-		matches      []byte
-		matchesLens  []uint32
-	}
-	cl struct {
-		tries        cl.Mem
-		idxs         cl.Mem
-		strs         cl.Mem
-		strsOffsets  cl.Mem
-		strLens      cl.Mem
-		hashBitmap   cl.Mem
-		targetHashes cl.Mem
-		matchFound   cl.Mem
-		matches      cl.Mem
-		matchesLens  cl.Mem
+	bs               struct { // buffers
+		tries        cl.BackedBuffer[uint32]
+		idxs         cl.BackedBuffer[uint32]
+		strs         cl.BackedBuffer[byte]
+		strsOffsets  cl.BackedBuffer[uint32]
+		strLens      cl.BackedBuffer[uint32]
+		hashBitmap   cl.BackedBuffer[uint32]
+		targetHashes cl.BackedBuffer[uint64]
+		matchFound   cl.BackedBuffer[int32] // len always 1
+		matches      cl.BackedBuffer[byte]
+		matchesLens  cl.BackedBuffer[uint32]
 	}
 }
 
@@ -113,14 +99,11 @@ func makeClBuffers(context cl.Context, s pattern.Segment, targetHashes []uint64,
 		return nil, err
 	}
 
-	// Create tries buffer.
-	b.data.tries = make([]uint32, numWorkers)
-
-	// Create index buffer.
-	b.data.idxs = make([]uint32, b.idxLen*numWorkers)
-
 	// Collect string arrays for all cases
 	// of unions of single string operands.
+	var strs []byte
+	var strsOffsets []uint32
+	var strLens []uint32
 	{
 		var addStrArrs func(s pattern.Segment)
 		addStrArrs = func(s pattern.Segment) {
@@ -152,113 +135,77 @@ func makeClBuffers(context cl.Context, s pattern.Segment, targetHashes []uint64,
 			strArr = append(strArr, b.strArrs[i]...)
 		}
 
-		b.data.strsOffsets = make([]uint32, len(strArr))
-		b.data.strLens = make([]uint32, len(strArr))
+		strsOffsets = make([]uint32, len(strArr))
+		strLens = make([]uint32, len(strArr))
 		for i := range strArr {
-			b.data.strsOffsets[i] = uint32(len(b.data.strs))
-			b.data.strLens[i] = uint32(len(strArr[i]))
-			b.data.strs = append(b.data.strs, strArr[i]...)
+			strsOffsets[i] = uint32(len(strs))
+			strLens[i] = uint32(len(strArr[i]))
+			strs = append(strs, strArr[i]...)
 		}
 	}
 
+	// Prepare target hash array (sort and dedupe).
+	targetHashes = slices.Clone(targetHashes) // don't modify the input slice
+	slices.Sort(targetHashes)
+	targetHashes = util.Uniq(targetHashes)
+
 	// Create hash bitmap (bloom filter)
+	var hashBitmap []uint32
 	{
 		const BITS = 24
-		b.data.hashBitmap = make([]uint32, 1<<(BITS-4))
+		hashBitmap = make([]uint32, 1<<(BITS-4))
 		for _, h := range targetHashes {
 			hl := uint32(h)
 			hh := uint32(h >> 32)
 			idxl := hl >> (32 - (BITS - 4))
 			bitl := uint32(1) << (hl & 31)
-			b.data.hashBitmap[idxl] |= bitl
+			hashBitmap[idxl] |= bitl
 			idxh := hh >> (32 - (BITS - 4))
 			bith := uint32(1) << (hh & 31)
-			b.data.hashBitmap[idxh] |= bith
+			hashBitmap[idxh] |= bith
 		}
 	}
 
-	// Target hash array.
-	{
-		b.data.targetHashes = make([]uint64, len(targetHashes))
-		copy(b.data.targetHashes, targetHashes)
-
-		// Sort and dedupe
-		slices.Sort(b.data.targetHashes)
-		b.data.targetHashes = util.Uniq(b.data.targetHashes)
-	}
-
-	// Match buffers
-	b.data.matchFound = make([]int32, 1)
-	b.data.matches = make([]byte, b.matchBufLen*numWorkers)
-	b.data.matchesLens = make([]uint32, numWorkers)
-
-	// Prevent errors from empty buffer
-	if len(b.data.idxs) == 0 {
-		b.data.idxs = []uint32{0}
-	}
-	if len(b.data.strs) == 0 {
-		b.data.strsOffsets = []uint32{0}
-		b.data.strLens = []uint32{0}
-		b.data.strs = []byte{0}
-	}
-	if len(b.data.targetHashes) == 0 {
-		b.data.targetHashes = []uint64{0}
-	}
-
-	// Pin data buffers
-	{
-		b.data.pin.Pin(&b.data.tries[0])
-		b.data.pin.Pin(&b.data.idxs[0])
-		b.data.pin.Pin(&b.data.strs[0])
-		b.data.pin.Pin(&b.data.strsOffsets[0])
-		b.data.pin.Pin(&b.data.strLens[0])
-		b.data.pin.Pin(&b.data.hashBitmap[0])
-		b.data.pin.Pin(&b.data.targetHashes[0])
-		b.data.pin.Pin(&b.data.matchFound[0])
-		b.data.pin.Pin(&b.data.matches[0])
-		b.data.pin.Pin(&b.data.matchesLens[0])
-	}
-
-	// Create according OpenCL Buffers
+	// Create OpenCL Buffers
 	{
 		var err error
-		b.cl.tries, err = cl.CreateBufferSlice(context, cl.MEM_READ_WRITE, b.data.tries)
+		b.bs.tries, err = cl.CreateBackedBuffer(context, cl.MEM_READ_WRITE, make([]uint32, numWorkers))
 		if err != nil {
 			return nil, fmt.Errorf("creating tries buffer: %w", err)
 		}
-		b.cl.idxs, err = cl.CreateBufferSlice(context, cl.MEM_READ_WRITE, b.data.idxs)
+		b.bs.idxs, err = cl.CreateBackedBuffer(context, cl.MEM_READ_WRITE, make([]uint32, b.idxLen*numWorkers))
 		if err != nil {
 			return nil, fmt.Errorf("creating indices buffer: %w", err)
 		}
-		b.cl.strs, err = cl.CreateBufferSlice(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, b.data.strs)
+		b.bs.strs, err = cl.CreateBackedBuffer(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, strs)
 		if err != nil {
 			return nil, fmt.Errorf("creating strings buffer: %w", err)
 		}
-		b.cl.strsOffsets, err = cl.CreateBufferSlice(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, b.data.strsOffsets)
+		b.bs.strsOffsets, err = cl.CreateBackedBuffer(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, strsOffsets)
 		if err != nil {
 			return nil, fmt.Errorf("creating strings offsets buffer: %w", err)
 		}
-		b.cl.strLens, err = cl.CreateBufferSlice(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, b.data.strLens)
+		b.bs.strLens, err = cl.CreateBackedBuffer(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, strLens)
 		if err != nil {
 			return nil, fmt.Errorf("creating string lengths buffer: %w", err)
 		}
-		b.cl.hashBitmap, err = cl.CreateBufferSlice(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, b.data.hashBitmap)
+		b.bs.hashBitmap, err = cl.CreateBackedBuffer(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, hashBitmap)
 		if err != nil {
 			return nil, fmt.Errorf("creating hash bitmap buffer: %w", err)
 		}
-		b.cl.targetHashes, err = cl.CreateBufferSlice(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, b.data.targetHashes)
+		b.bs.targetHashes, err = cl.CreateBackedBuffer(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, targetHashes)
 		if err != nil {
 			return nil, fmt.Errorf("creating target hash buffer: %w", err)
 		}
-		b.cl.matchFound, err = cl.CreateBufferSlice(context, cl.MEM_WRITE_ONLY, b.data.matchFound)
+		b.bs.matchFound, err = cl.CreateBackedBuffer(context, cl.MEM_WRITE_ONLY, make([]int32, 1))
 		if err != nil {
 			return nil, fmt.Errorf("creating match found boolean: %w", err)
 		}
-		b.cl.matches, err = cl.CreateBufferSlice(context, cl.MEM_WRITE_ONLY, b.data.matches)
+		b.bs.matches, err = cl.CreateBackedBuffer(context, cl.MEM_WRITE_ONLY, make([]byte, b.matchBufLen*numWorkers))
 		if err != nil {
 			return nil, fmt.Errorf("creating match buffer: %w", err)
 		}
-		b.cl.matchesLens, err = cl.CreateBufferSlice(context, cl.MEM_READ_WRITE|cl.MEM_COPY_HOST_PTR, b.data.matchesLens)
+		b.bs.matchesLens, err = cl.CreateBackedBuffer(context, cl.MEM_READ_WRITE|cl.MEM_COPY_HOST_PTR, make([]uint32, numWorkers))
 		if err != nil {
 			return nil, fmt.Errorf("creating matches length buffer: %w", err)
 		}
@@ -268,17 +215,16 @@ func makeClBuffers(context cl.Context, s pattern.Segment, targetHashes []uint64,
 }
 
 func (b *clBuffers) Delete() {
-	cl.ReleaseMemObject(b.cl.tries)
-	cl.ReleaseMemObject(b.cl.idxs)
-	cl.ReleaseMemObject(b.cl.strs)
-	cl.ReleaseMemObject(b.cl.strsOffsets)
-	cl.ReleaseMemObject(b.cl.strLens)
-	cl.ReleaseMemObject(b.cl.hashBitmap)
-	cl.ReleaseMemObject(b.cl.targetHashes)
-	cl.ReleaseMemObject(b.cl.matchFound)
-	cl.ReleaseMemObject(b.cl.matches)
-	cl.ReleaseMemObject(b.cl.matchesLens)
-	b.data.pin.Unpin()
+	b.bs.tries.Release()
+	b.bs.idxs.Release()
+	b.bs.strs.Release()
+	b.bs.strsOffsets.Release()
+	b.bs.strLens.Release()
+	b.bs.hashBitmap.Release()
+	b.bs.targetHashes.Release()
+	b.bs.matchFound.Release()
+	b.bs.matches.Release()
+	b.bs.matchesLens.Release()
 }
 
 func (b *clBuffers) strArrOffset(s pattern.Segment, unionIdx int) int {
@@ -298,17 +244,17 @@ func (b *clBuffers) strArrOffset(s pattern.Segment, unionIdx int) int {
 }
 
 func (b *clBuffers) readMatchFound(queue cl.CommandQueue) (err error) {
-	return cl.EnqueueReadBufferSlice(queue, b.cl.matchFound, true, 0, b.data.matchFound, nil, nil)
+	return b.bs.matchFound.EnqueueRead(queue, true, 0, -1, nil, nil)
 }
 
-func (b *clBuffers) read(queue cl.CommandQueue) (err error) {
-	if err = cl.EnqueueReadBufferSlice(queue, b.cl.tries, false, 0, b.data.tries, nil, nil); err != nil {
+func (b *clBuffers) readTriesAndMatches(queue cl.CommandQueue) (err error) {
+	if err = b.bs.tries.EnqueueRead(queue, false, 0, -1, nil, nil); err != nil {
 		return
 	}
-	if err = cl.EnqueueReadBufferSlice(queue, b.cl.matches, false, 0, b.data.matches, nil, nil); err != nil {
+	if err = b.bs.matches.EnqueueRead(queue, false, 0, -1, nil, nil); err != nil {
 		return
 	}
-	if err = cl.EnqueueReadBufferSlice(queue, b.cl.matchesLens, false, 0, b.data.matchesLens, nil, nil); err != nil {
+	if err = b.bs.matchesLens.EnqueueRead(queue, false, 0, -1, nil, nil); err != nil {
 		return
 	}
 	if err = cl.Finish(queue); err != nil {
@@ -317,18 +263,25 @@ func (b *clBuffers) read(queue cl.CommandQueue) (err error) {
 	return
 }
 
-func (b *clBuffers) write(queue cl.CommandQueue, writeMatchLens bool) error {
-	if err := cl.EnqueueWriteBufferSlice(queue, b.cl.tries, false, 0, b.data.tries, nil, nil); err != nil {
+// pass 0 as triesFillValue to fill with buffer contents instead of fixed value
+func (b *clBuffers) write(queue cl.CommandQueue, triesFillValue uint32, zeroMatchesLens bool) error {
+	if triesFillValue == 0 {
+		if err := b.bs.tries.EnqueueWrite(queue, false, 0, -1, nil, nil); err != nil {
+			return err
+		}
+	} else {
+		if err := b.bs.tries.EnqueueFill(queue, []uint32{triesFillValue}, 0, -1, nil, nil); err != nil {
+			return err
+		}
+	}
+	if err := b.bs.idxs.EnqueueWrite(queue, false, 0, -1, nil, nil); err != nil {
 		return err
 	}
-	if err := cl.EnqueueWriteBufferSlice(queue, b.cl.idxs, false, 0, b.data.idxs, nil, nil); err != nil {
+	if err := b.bs.matchFound.EnqueueWrite(queue, false, 0, -1, nil, nil); err != nil {
 		return err
 	}
-	if err := cl.EnqueueWriteBufferSlice(queue, b.cl.matchFound, false, 0, b.data.matchFound, nil, nil); err != nil {
-		return err
-	}
-	if writeMatchLens {
-		if err := cl.EnqueueWriteBufferSlice(queue, b.cl.matchesLens, false, 0, b.data.matchesLens, nil, nil); err != nil {
+	if zeroMatchesLens {
+		if err := b.bs.matchesLens.EnqueueFill(queue, []uint32{0}, 0, -1, nil, nil); err != nil {
 			return err
 		}
 	}
@@ -338,12 +291,13 @@ func (b *clBuffers) write(queue cl.CommandQueue, writeMatchLens bool) error {
 	return nil
 }
 
-func (b *clBuffers) drainMatches() (matches []string) {
+// Gets the match strings from host buffer data.
+func (b *clBuffers) getMatches() (matches []string) {
 	var s strings.Builder
 	for i := range b.numWorkers {
 		offs := i * b.matchBufLen
-		for j := range int(b.data.matchesLens[i]) {
-			c := b.data.matches[offs+j]
+		for j := range int(b.bs.matchesLens.Items[i]) {
+			c := b.bs.matches.Items[offs+j]
 			if c != 0 {
 				s.WriteByte(c)
 			} else {
@@ -351,9 +305,6 @@ func (b *clBuffers) drainMatches() (matches []string) {
 				s.Reset()
 			}
 		}
-	}
-	for i := range b.data.matchesLens {
-		b.data.matchesLens[i] = 0
 	}
 	return
 }
@@ -392,7 +343,7 @@ func generateClCode(s pattern.Segment, bufs *clBuffers) (code []byte) {
 	cb := &codeBuilder{IndentStr: "  "}
 	cb.L("#define MAX_CANDIDATE_LEN %d", bufs.maxCandidateLen)
 	cb.L("#define MAX_MATCH_BUF_LEN %d", bufs.matchBufLen)
-	cb.L("#define NUM_TARGET_HASHES %d", len(bufs.data.targetHashes))
+	cb.L("#define NUM_TARGET_HASHES %d", len(bufs.bs.targetHashes.Items))
 	cb.L("#define IDX_LEN %d", bufs.idxLen)
 	cb.L("%s", preludeClCode)
 
