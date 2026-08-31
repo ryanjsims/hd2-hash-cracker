@@ -1,5 +1,9 @@
 package util
 
+import (
+	"iter"
+)
+
 // RingBuf is a generic circular buffer backed
 // by a slice that automatically grows.
 //
@@ -102,4 +106,22 @@ func (rb *RingBuf[T]) PeekAll() (bufA []T, bufB []T) {
 		bufB = rb.b[:rb.wp]
 	}
 	return
+}
+
+// Like [RingBuf.PeekAll], but returns an iterator
+// over all items.
+func (rb *RingBuf[T]) PeekAllIter() iter.Seq[T] {
+	return func(yield func(T) bool) {
+		a, b := rb.PeekAll()
+		for _, v := range a {
+			if !yield(v) {
+				return
+			}
+		}
+		for _, v := range b {
+			if !yield(v) {
+				return
+			}
+		}
+	}
 }

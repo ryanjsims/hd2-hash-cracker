@@ -145,8 +145,14 @@ func crack(c *cracker, prog pattern.Segment, targetHashes []uint64) error {
 	}
 	c.Msg("Using OpenCL platform %q with device %q", platformName, deviceName)
 
+	crackerOpts := pcl.Options{
+		Workers: 256,
+		Tries:   8192,
+	}
+	tuner := NewTuner(crackerOpts.Workers, crackerOpts.Tries)
+
 	c.Msg("Initializing buffers and compiling OpenCL kernel")
-	cr, err := pcl.NewCracker(device, prog, targetHashes, pcl.Options{})
+	cr, err := pcl.NewCracker(device, prog, targetHashes, crackerOpts)
 	if err != nil {
 		return err
 	}
@@ -199,6 +205,15 @@ func crack(c *cracker, prog pattern.Segment, targetHashes []uint64) error {
 		}
 		allFound := len(c.newUniqueHashes) == len(targetHashes)
 		c.mu.Unlock()
+
+		if w, t, done, changed := tuner.Step(int(cr.LastKernelRunDuration().Nanoseconds()), newTries); changed {
+			c.Msg("tuner: set workers=%d, tries/worker=%d", w, t)
+			cr.ChangeNumWorkers(w)
+			cr.ChangeNumTries(t)
+			if done {
+				c.Msg("tuner: done")
+			}
+		}
 
 		prevTotalIdx = cr.TotalIdx()
 		prevTime = now

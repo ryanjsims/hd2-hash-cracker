@@ -169,13 +169,8 @@ func makeClBuffers(context cl.Context, s pattern.Segment, targetHashes []uint64,
 	// Create OpenCL Buffers
 	{
 		var err error
-		b.bs.tries, err = cl.CreateBackedBuffer(context, cl.MEM_READ_WRITE, make([]uint32, numWorkers))
-		if err != nil {
-			return nil, fmt.Errorf("creating tries buffer: %w", err)
-		}
-		b.bs.idxs, err = cl.CreateBackedBuffer(context, cl.MEM_READ_WRITE, make([]uint32, b.idxLen*numWorkers))
-		if err != nil {
-			return nil, fmt.Errorf("creating indices buffer: %w", err)
+		if err = b.createWorkerDependentbuffers(context, numWorkers); err != nil {
+			return nil, err
 		}
 		b.bs.strs, err = cl.CreateBackedBuffer(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, strs)
 		if err != nil {
@@ -201,17 +196,29 @@ func makeClBuffers(context cl.Context, s pattern.Segment, targetHashes []uint64,
 		if err != nil {
 			return nil, fmt.Errorf("creating match found boolean: %w", err)
 		}
-		b.bs.matches, err = cl.CreateBackedBuffer(context, cl.MEM_WRITE_ONLY, make([]byte, b.matchBufLen*numWorkers))
-		if err != nil {
-			return nil, fmt.Errorf("creating match buffer: %w", err)
-		}
-		b.bs.matchesLens, err = cl.CreateBackedBuffer(context, cl.MEM_READ_WRITE|cl.MEM_COPY_HOST_PTR, make([]uint32, numWorkers))
-		if err != nil {
-			return nil, fmt.Errorf("creating matches length buffer: %w", err)
-		}
 	}
 
 	return b, nil
+}
+
+func (b *clBuffers) createWorkerDependentbuffers(context cl.Context, numWorkers int) (err error) {
+	b.bs.tries, err = cl.CreateBackedBuffer(context, cl.MEM_READ_WRITE, make([]uint32, numWorkers))
+	if err != nil {
+		return fmt.Errorf("creating tries buffer: %w", err)
+	}
+	b.bs.idxs, err = cl.CreateBackedBuffer(context, cl.MEM_READ_WRITE, make([]uint32, b.idxLen*numWorkers))
+	if err != nil {
+		return fmt.Errorf("creating indices buffer: %w", err)
+	}
+	b.bs.matches, err = cl.CreateBackedBuffer(context, cl.MEM_WRITE_ONLY, make([]byte, b.matchBufLen*numWorkers))
+	if err != nil {
+		return fmt.Errorf("creating match buffer: %w", err)
+	}
+	b.bs.matchesLens, err = cl.CreateBackedBuffer(context, cl.MEM_READ_WRITE|cl.MEM_COPY_HOST_PTR, make([]uint32, numWorkers))
+	if err != nil {
+		return fmt.Errorf("creating matches length buffer: %w", err)
+	}
+	return
 }
 
 func (b *clBuffers) Delete() {
@@ -225,6 +232,29 @@ func (b *clBuffers) Delete() {
 	b.bs.matchFound.Release()
 	b.bs.matches.Release()
 	b.bs.matchesLens.Release()
+}
+
+// Only valid if no match was found the previous dispatch, as it zeroes
+// all tries and matchesLens.
+//
+// If this returns a nonzero error, clBuffers state should be seen as corrupted
+// and the clBuffers should be discarded.
+func (b *clBuffers) ResizeToWorkers(context cl.Context, queue cl.CommandQueue, newNumWorkers int) error {
+	b.bs.tries.Release()
+	b.bs.idxs.Release()
+	b.bs.matches.Release()
+	b.bs.matchesLens.Release()
+	if err := b.createWorkerDependentbuffers(context, newNumWorkers); err != nil {
+		return err
+	}
+	if err := b.bs.tries.EnqueueFill(queue, []uint32{0}, 0, -1, nil, nil); err != nil {
+		return err
+	}
+	if err := cl.Finish(queue); err != nil {
+		return err
+	}
+	b.numWorkers = newNumWorkers
+	return nil
 }
 
 func (b *clBuffers) strArrOffset(s pattern.Segment, unionIdx int) int {

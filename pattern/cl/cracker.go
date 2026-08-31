@@ -3,6 +3,7 @@ package cl
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	cl "github.com/xypwn/gocl/cl-3.1"
 	"github.com/xypwn/hd2-hash-cracker/pattern"
@@ -15,9 +16,9 @@ var Done = errors.New("cracker done")
 // Any zeroed field will be treated as if set to
 // its default value.
 type Options struct {
-	NumWorkers                int // default 4096
-	MinMatchBufLen            int // default 128
-	TriesPerWorkerPerDispatch int // default 65536
+	Workers        int // default 4096
+	MinMatchBufLen int // default 128
+	Tries          int // default 65536
 }
 
 type Cracker struct {
@@ -25,26 +26,29 @@ type Cracker struct {
 		OpenClCode string
 	}
 
-	device   cl.DeviceId
-	context  cl.Context
-	queue    cl.CommandQueue
-	kernel   cl.Kernel
-	opts     Options
-	prog     pattern.Segment
-	bufs     *clBuffers
-	idx      pattern.SegIdx
-	totalIdx int
+	newWorkers int
+
+	device                cl.DeviceId
+	context               cl.Context
+	queue                 cl.CommandQueue
+	kernel                cl.Kernel
+	opts                  Options
+	prog                  pattern.Segment
+	bufs                  *clBuffers
+	idx                   pattern.SegIdx
+	totalIdx              int
+	lastKernelRunDuration time.Duration
 }
 
 func NewCracker(device cl.DeviceId, prog pattern.Segment, targetHashes []uint64, opts Options) (_ *Cracker, err error) {
-	if opts.NumWorkers == 0 {
-		opts.NumWorkers = 4096
+	if opts.Workers == 0 {
+		opts.Workers = 4096
 	}
 	if opts.MinMatchBufLen == 0 {
 		opts.MinMatchBufLen = 128
 	}
-	if opts.TriesPerWorkerPerDispatch == 0 {
-		opts.TriesPerWorkerPerDispatch = 65536
+	if opts.Tries == 0 {
+		opts.Tries = 65536
 	}
 	c := &Cracker{
 		prog: prog,
@@ -67,7 +71,7 @@ func NewCracker(device cl.DeviceId, prog pattern.Segment, targetHashes []uint64,
 
 	matchBufLen := opts.MinMatchBufLen
 	matchBufLen = max(matchBufLen, 2*(prog.MaxLen()+1))
-	c.bufs, err = makeClBuffers(c.context, prog, targetHashes, opts.NumWorkers, matchBufLen)
+	c.bufs, err = makeClBuffers(c.context, prog, targetHashes, opts.Workers, matchBufLen)
 	if err != nil {
 		return nil, fmt.Errorf("creating buffers: %w", err)
 	}
@@ -90,12 +94,8 @@ func NewCracker(device cl.DeviceId, prog pattern.Segment, targetHashes []uint64,
 	if err != nil {
 		return nil, fmt.Errorf("creating kernel: %w", err)
 	}
-	if err := cl.SetKernelArgValues(c.kernel, 0,
-		c.bufs.bs.tries.Mem, c.bufs.bs.idxs.Mem,
-		c.bufs.bs.strs.Mem, c.bufs.bs.strsOffsets.Mem, c.bufs.bs.strLens.Mem,
-		c.bufs.bs.hashBitmap.Mem, c.bufs.bs.targetHashes.Mem,
-		c.bufs.bs.matchFound.Mem, c.bufs.bs.matches.Mem, c.bufs.bs.matchesLens.Mem); err != nil {
-		return nil, fmt.Errorf("setting arg values: %w", err)
+	if err := c.setKernelArgValues(); err != nil {
+		return nil, err
 	}
 
 	c.queue, err = cl.CreateCommandQueueWithProperties(c.context, device, nil)
@@ -115,6 +115,20 @@ func (c *Cracker) Delete() {
 	if c.kernel != nil {
 		cl.ReleaseKernel(c.kernel)
 	}
+	if c.bufs != nil {
+		c.bufs.Delete()
+	}
+}
+
+func (c *Cracker) setKernelArgValues() error {
+	if err := cl.SetKernelArgValues(c.kernel, 0,
+		c.bufs.bs.tries.Mem, c.bufs.bs.idxs.Mem,
+		c.bufs.bs.strs.Mem, c.bufs.bs.strsOffsets.Mem, c.bufs.bs.strLens.Mem,
+		c.bufs.bs.hashBitmap.Mem, c.bufs.bs.targetHashes.Mem,
+		c.bufs.bs.matchFound.Mem, c.bufs.bs.matches.Mem, c.bufs.bs.matchesLens.Mem); err != nil {
+		return fmt.Errorf("setting arg values: %w", err)
+	}
+	return nil
 }
 
 // TotalIdx returns the total iteration index,
@@ -122,6 +136,19 @@ func (c *Cracker) Delete() {
 // strings checked.
 func (c *Cracker) TotalIdx() int {
 	return c.totalIdx
+}
+
+func (c *Cracker) LastKernelRunDuration() time.Duration {
+	return c.lastKernelRunDuration
+}
+
+// Will be realized once no matches were found in the previous dispatch.
+func (c *Cracker) ChangeNumWorkers(newNumWorkers int) {
+	c.newWorkers = newNumWorkers
+}
+
+func (c *Cracker) ChangeNumTries(newNumTries int) {
+	c.opts.Tries = newNumTries
 }
 
 // Dispatch dispatches a single batch of workers.
@@ -133,8 +160,21 @@ func (c *Cracker) Dispatch() (matches []string, err error) {
 	// Initialize new buffer values
 	{
 		matchFound := c.bufs.bs.matchFound.Items[0] != 0
-		fillTries := true
 
+		// Resize buffer if requested and no match was found
+		// (otherwise we would falsely zero all fields in the
+		// tries and matchesLens buffers).
+		if c.newWorkers != 0 && c.newWorkers != c.opts.Workers && !matchFound {
+			if err := c.bufs.ResizeToWorkers(c.context, c.queue, c.newWorkers); err != nil {
+				return nil, err
+			}
+			c.opts.Workers = c.newWorkers
+			if err := c.setKernelArgValues(); err != nil {
+				return nil, err
+			}
+		}
+
+		fillTries := true
 		done := true
 		for i := range c.bufs.numWorkers {
 			if matchFound && // tries is only valid if a match was found
@@ -150,7 +190,7 @@ func (c *Cracker) Dispatch() (matches []string, err error) {
 				c.idx.Add(c.prog, c.totalIdx)
 			}
 			readIdx(c.bufs.bs.idxs.Items[i*c.bufs.idxLen:], c.prog, c.idx)
-			tries := c.opts.TriesPerWorkerPerDispatch
+			tries := c.opts.Tries
 			if c.totalIdx+tries > c.prog.Comp {
 				tries = c.prog.Comp - c.totalIdx
 				fillTries = false
@@ -170,7 +210,7 @@ func (c *Cracker) Dispatch() (matches []string, err error) {
 		triesFillValue := 0 // read from host buffer (don't just fill)
 		if fillTries {
 			// faster: fill all tries with the same value
-			triesFillValue = c.opts.TriesPerWorkerPerDispatch
+			triesFillValue = c.opts.Tries
 		}
 		if err := c.bufs.write(c.queue,
 			// If the tries buffer has the same value every
@@ -187,12 +227,14 @@ func (c *Cracker) Dispatch() (matches []string, err error) {
 	}
 
 	// Actual OpenCL dispatch
+	tStart := time.Now()
 	if err := cl.EnqueueNDRangeKernel(c.queue, c.kernel, 1, nil, []uint64{uint64(c.bufs.numWorkers)}, nil, nil, nil); err != nil {
 		return nil, fmt.Errorf("running kernel: %w", err)
 	}
 	if err := cl.Finish(c.queue); err != nil {
 		return nil, fmt.Errorf("finishing queue: %w", err)
 	}
+	c.lastKernelRunDuration = time.Since(tStart)
 
 	// Read back necessary data
 	{

@@ -2,8 +2,8 @@ github.com/hellflame/argparse v1.12.2 h1:h3RUZDKB59UOZV7ARduLzYTwJrUwl4WGlR5opDR
 github.com/hellflame/argparse v1.12.2/go.mod h1:w3NUbbFQE6S75bkFfL8PL5/3fVNIHthHVI1cR7tjvC4=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
-github.com/xypwn/gocl v0.0.0-20260830192936-ef1217f15036 h1:gxax3ozm8p3bR1qNsFyzczDSVmei3XPnFVsE+FUFsY4=
-github.com/xypwn/gocl v0.0.0-20260830192936-ef1217f15036/go.mod h1:En52Jnq3ldN+SrBJBDytwYmn+piRz/ROQbebAbi7TVM=
+github.com/xypwn/gocl v0.0.0-20260830230154-e7c14d378ca2 h1:2PR0OLKG3g4J9tfjO1ABVWpVfEYUo63l6qY6GYmJVaE=
+github.com/xypwn/gocl v0.0.0-20260830230154-e7c14d378ca2/go.mod h1:En52Jnq3ldN+SrBJBDytwYmn+piRz/ROQbebAbi7TVM=
 go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
 go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=
 golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
