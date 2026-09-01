@@ -40,11 +40,11 @@ type Tuner struct {
 
 func NewTuner(workers, tries int) *Tuner {
 	return &Tuner{
-		remainingWarmupNs: 1 * secondNs,
+		remainingWarmupNs: 2 * secondNs,
 		baseline: tunerSampleRun{
 			Workers:          workers,
 			Tries:            tries,
-			NsUntilCollected: 1 * secondNs,
+			NsUntilCollected: 2 * secondNs,
 		},
 		workerIncStep: 1,
 	}

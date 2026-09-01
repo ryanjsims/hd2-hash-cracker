@@ -6,6 +6,8 @@ import (
 	"iter"
 	"math"
 	"math/big"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -477,13 +479,20 @@ func compile(irSeg IrSegment, opts CompileOptions) Segment {
 // Pass opts as CompileOptions{} for default values.
 //
 // If err is of type [Error], it also has positional information.
-func Compile(src []byte, opts CompileOptions) (prog Segment, err error) {
+func Compile(filename string, src []byte, opts CompileOptions) (prog Segment, err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("compiling pattern: %w", err)
 		}
 	}()
-	_, irSeg, err := parse(src, opts.Vars, opts.Funcs)
+	var dir *os.Root
+	if filename != "" {
+		dir, err = os.OpenRoot(filepath.Dir(filename))
+		if err != nil {
+			return Segment{}, err
+		}
+	}
+	_, irSeg, err := parse(src, dir, opts.Vars, opts.Funcs)
 	if err != nil {
 		return Segment{}, err
 	}

@@ -31,6 +31,8 @@ Fast GPU-based hash cracking for Helldivers 2, optimized for file paths.
 ### Builtin variable and functions
 - `#{load filename}`: loads pattern from file `filename` and returns it
 - `#{import filename}`: import variables from file `filename` (never returns a value)
+- `#{wordlist filename}`: import wordlist from file as or (`|`) expression
+- `#{split x delims}`: split each string in the or expression `x` into words by any of the characters in delims and return each deduplicated word
 - `#{filter x n}`: limit the or expression `x` to the first `n` elements
 - `#{filter x regex}`: filter the or expression `x` to only those that match `regex`
 

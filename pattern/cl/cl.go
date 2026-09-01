@@ -421,7 +421,7 @@ func generateClCode(s pattern.Segment, bufs *clBuffers) (code []byte) {
 	genCode = func(cb *codeBuilder, s pattern.Segment, idx int, guessFn string) {
 		if s.Type == pattern.SegmentText {
 			cb.L("const u32 str_len = %d;", len(s.Str))
-			writeExprPushStr(cb, "memcpy_pg", quote(s.Str))
+			writeExprPushStr(cb, "memcpy_pc", quote(s.Str))
 			writeExprCallGuessFn(cb, guessFn)
 			writeExprPopStr(cb)
 			return

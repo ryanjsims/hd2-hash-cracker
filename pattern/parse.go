@@ -1,11 +1,13 @@
 package pattern
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"maps"
 	"math"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -115,6 +117,8 @@ type parser struct {
 	src []byte
 	i   int
 
+	// Directory to look for files in
+	dir *os.Root
 	// All functions and variables
 	funcs map[string]any
 	vars  map[string]IrSegment
@@ -243,6 +247,8 @@ func (p *parser) parseSegmentRepeatMinMaxSep() IrSegmentRepeat {
 		if delim == '}' {
 			return IrSegmentRepeat{Min: min, Max: max}
 		}
+	} else {
+		max = min
 	}
 	sep := p.parseExpr("}")
 	return IrSegmentRepeat{Min: min, Max: max, Sep: sep}
@@ -340,6 +346,8 @@ func (p *parser) parseString() string {
 			if c == 0 {
 				p.expectLast("")
 			} else if rune(c) == quote {
+				p.next()
+				p.expectLast(" \t}")
 				break
 			} else if c == '\\' {
 				c1 := p.next()
@@ -507,15 +515,19 @@ func (p *parser) parseHashtagExpr() IrSegment {
 			p.err(fmt.Errorf("%w: %s: %w", ErrCallingFunc, name, err))
 		}
 		if name == "load" || name == "import" {
-			// Special function "load" can't be handled
-			// like normal function, since it modifies the
+			// Special functions "load" and "import" can't be handled
+			// like normal functions, since they modify the
 			// current parser instance.
 			filename := args[0].(string)
-			data, err := os.ReadFile(filename)
+			data, err := p.dir.ReadFile(filename)
 			if err != nil {
 				funcCallErr(err)
 			}
-			p1, seg, err := parse(data, p.initialVars, p.initialFuncs)
+			root, err := p.dir.OpenRoot(filepath.Dir(filename))
+			if err != nil {
+				funcCallErr(err)
+			}
+			p1, seg, err := parse(data, root, p.initialVars, p.initialFuncs)
 			if err != nil {
 				funcCallErr(err)
 			}
@@ -537,6 +549,21 @@ func (p *parser) parseHashtagExpr() IrSegment {
 			default:
 				panic("unhandled case")
 			}
+		} else if name == "wordlist" {
+			filename := args[0].(string)
+			b, err := p.dir.ReadFile(filename)
+			if err != nil {
+				funcCallErr(err)
+			}
+			var ws []IrSegment
+			for line := range bytes.SplitSeq(b, []byte("\n")) {
+				line = bytes.TrimSuffix(line, []byte("\r"))
+				if len(line) == 0 {
+					continue
+				}
+				ws = append(ws, IrSegmentStr(line))
+			}
+			return IrSegmentChoice(ws)
 		} else {
 			// Normal function call
 			vins := make([]reflect.Value, len(args))
@@ -705,7 +732,7 @@ func (p *parser) checkVarAndFuncNamesAndTypes() {
 	}
 }
 
-func parse(src []byte, extraVars map[string]IrSegment, extraFuncs map[string]any) (p *parser, irSeg IrSegment, err error) {
+func parse(src []byte, dir *os.Root, extraVars map[string]IrSegment, extraFuncs map[string]any) (p *parser, irSeg IrSegment, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if e, ok := r.(*Error); ok {
@@ -727,6 +754,7 @@ func parse(src []byte, extraVars map[string]IrSegment, extraFuncs map[string]any
 
 	p = &parser{
 		src:          src,
+		dir:          dir,
 		initialFuncs: make(map[string]any),
 		initialVars:  make(map[string]IrSegment),
 	}

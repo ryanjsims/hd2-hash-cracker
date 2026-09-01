@@ -35,6 +35,7 @@ type cracker struct {
 	newHashes         []string // newly cracked hashes
 	newUniqueHashes   map[string]struct{}
 	lastStr           string
+	extraStatusStr    string
 	triesCnt          int
 	triesPerSecondBuf util.RingBuf[float64]
 	// End           //
@@ -46,7 +47,7 @@ func runCracker(ctx context.Context, patternSrc []byte, targetHashes []uint64) (
 		newUniqueHashes: make(map[string]struct{}),
 	}
 
-	prog, err := pattern.Compile(patternSrc, pattern.CompileOptions{})
+	prog, err := pattern.Compile("pattern.txt", patternSrc, pattern.CompileOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +75,11 @@ loop:
 			rate := (util.Sum(a) + util.Sum(b)) / float64(c.triesPerSecondBuf.Len())
 			rateStr = fmt.Sprintf("%.2fMH/s", rate/1e6)
 		}
-		cli.Status("Progress=%.3f%%, Rate=%s, Last=%q", float64(tries)/float64(prog.Comp)*100, rateStr, lastStr)
+		extraStatus := c.extraStatusStr
+		if extraStatus != "" {
+			extraStatus = ", " + extraStatus
+		}
+		cli.Status("Progress=%.3f%%, Rate=%s, Last=%q%s", float64(tries)/float64(prog.Comp)*100, rateStr, lastStr, extraStatus)
 
 		for c.triesPerSecondBuf.Len() > 20 {
 			c.triesPerSecondBuf.Read()
@@ -112,6 +117,13 @@ func (c *cracker) Msg(format string, args ...any) {
 	s := fmt.Sprintf(format, args...)
 	c.mu.Lock()
 	c.msgBuf = append(c.msgBuf, s)
+	c.mu.Unlock()
+}
+
+func (c *cracker) Status(format string, args ...any) {
+	s := fmt.Sprintf(format, args...)
+	c.mu.Lock()
+	c.extraStatusStr = s
 	c.mu.Unlock()
 }
 
@@ -161,6 +173,7 @@ func crack(c *cracker, prog pattern.Segment, targetHashes []uint64) error {
 	//os.WriteFile("program.cl", []byte(cr.DebugInfo.OpenClCode), 0666)
 
 	c.Msg("Making guesses")
+	c.Status("Warming up / collecting baseline")
 	prevTotalIdx := 0
 	var prevTime time.Time
 	idx := prog.MakeIndex()
@@ -207,12 +220,15 @@ func crack(c *cracker, prog pattern.Segment, targetHashes []uint64) error {
 		c.mu.Unlock()
 
 		if w, t, done, changed := tuner.Step(int(cr.LastKernelRunDuration().Nanoseconds()), newTries); changed {
-			c.Msg("tuner: set workers=%d, tries/worker=%d", w, t)
+			var tuneStr string
+			if done {
+				tuneStr = "Tuned"
+			} else {
+				tuneStr = "Tuning"
+			}
+			c.Status("%s (WxT=%dx%d)", tuneStr, w, t)
 			cr.ChangeNumWorkers(w)
 			cr.ChangeNumTries(t)
-			if done {
-				c.Msg("tuner: done")
-			}
 		}
 
 		prevTotalIdx = cr.TotalIdx()
@@ -231,21 +247,6 @@ func crack(c *cracker, prog pattern.Segment, targetHashes []uint64) error {
 }
 
 func run() error {
-	{
-		ss := []string{
-			"content/abc",
-			"content/a",
-			"content/abcdefghijklm",
-		}
-		var b bytes.Buffer
-		for _, s := range ss {
-			fmt.Fprintf(&b, "0x%016x\n", hash.Murmur64aSum(s))
-		}
-		if err := os.WriteFile("target.txt", b.Bytes(), 0666); err != nil {
-			return err
-		}
-	}
-
 	var epilog strings.Builder
 	{
 		// TODO: Pattern syntax guide
@@ -264,7 +265,7 @@ func run() error {
 	})
 	optHashes := argp.String("t", "target", &argparse.Option{
 		Help:     "file listing target hashes to crack",
-		Default:  "target.txt",
+		Default:  "hd2-patterns/target.txt",
 		Required: true,
 	})
 	optOutput := argp.String("o", "output", &argparse.Option{
