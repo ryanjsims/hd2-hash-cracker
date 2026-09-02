@@ -58,7 +58,7 @@ func TestParse(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			require := require.New(t)
-			_, irSeg, err := parse([]byte(c.expr), nil, nil, nil)
+			_, irSeg, err := parse([]byte(c.expr), "", nil, nil, nil)
 			if c.wantErr == "" {
 				require.NoError(err)
 			} else {
@@ -115,7 +115,7 @@ func TestCompile(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			require := require.New(t)
-			prog, err := Compile("", []byte(c.expr), c.opts)
+			prog, err := Compile([]byte(c.expr), "", nil, c.opts)
 			if c.wantErr == "" {
 				require.NoError(err)
 			} else {
@@ -155,7 +155,7 @@ func TestAdd(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				require := require.New(t)
-				prog, err := Compile("", []byte(c.expr), CompileOptions{NoOptimize: !optimize})
+				prog, err := Compile([]byte(c.expr), "", nil, CompileOptions{NoOptimize: !optimize})
 				require.NoError(err)
 				idx := prog.MakeIndex()
 				for i := 0; i < len(c.nwant); i += 2 {

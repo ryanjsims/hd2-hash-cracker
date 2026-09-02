@@ -14,7 +14,7 @@ import (
 
 func TestCl(t *testing.T) {
 	require := require.New(t)
-	prog, err := pattern.Compile("", []byte("<a|b|c|d|e|f|g|h|i|j>{1,6}"), pattern.CompileOptions{})
+	prog, err := pattern.Compile([]byte("<a|b|c|d|e|f|g|h|i|j>{1,6}"), "", nil, pattern.CompileOptions{})
 	require.NoError(err)
 
 	runtime.LockOSThread()

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"runtime"
@@ -41,13 +42,13 @@ type cracker struct {
 	// End           //
 }
 
-func runCracker(ctx context.Context, patternSrc []byte, targetHashes []uint64) (newHashes []string, err error) {
+func runCracker(ctx context.Context, patternSrc []byte, patternFilename string, patternFs fs.FS, targetHashes []uint64) (newHashes []string, err error) {
 	c := &cracker{
 		ctx:             ctx,
 		newUniqueHashes: make(map[string]struct{}),
 	}
 
-	prog, err := pattern.Compile("pattern.txt", patternSrc, pattern.CompileOptions{})
+	prog, err := pattern.Compile(patternSrc, patternFilename, patternFs, pattern.CompileOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -300,14 +301,25 @@ func run() error {
 		}()
 	}
 
+	wordDir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
 	var patternSrc []byte
+	var patternFilename string
+	patternRootFs, err := os.OpenRoot(wordDir)
+	if err != nil {
+		return err
+	}
 	if *optExpr {
+		patternFilename = "-"
 		patternSrc = []byte(*optInput)
 	} else {
-		b, err := os.ReadFile(*optInput)
+		b, err := fs.ReadFile(patternRootFs.FS(), *optInput)
 		if err != nil {
 			return fmt.Errorf("reading input file: %w", err)
 		}
+		patternFilename = *optInput
 		patternSrc = b
 	}
 
@@ -337,7 +349,7 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	newHashes, err := runCracker(ctx, patternSrc, targetHashes)
+	newHashes, err := runCracker(ctx, patternSrc, patternFilename, patternRootFs.FS(), targetHashes)
 	if err != nil {
 		return err
 	}

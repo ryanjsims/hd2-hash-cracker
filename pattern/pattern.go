@@ -3,11 +3,10 @@ package pattern
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"iter"
 	"math"
 	"math/big"
-	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -47,12 +46,14 @@ var (
 )
 
 type Error struct {
-	Position int
+	Filename string
+	Line     int
+	Column   int
 	Err      error
 }
 
 func (e *Error) Error() string {
-	return fmt.Sprintf("pattern error at position %d: %v", e.Position+1, e.Err)
+	return fmt.Sprintf("pattern error at position %s:%d:%d: %v", e.Filename, e.Line, e.Column, e.Err)
 }
 
 func (e *Error) Unwrap() error {
@@ -476,23 +477,19 @@ func compile(irSeg IrSegment, opts CompileOptions) Segment {
 
 // Compile compiles the given expression.
 //
+// fs is an optional file system where filename lives, which
+// is needed for #load{} and #import{}.
+//
 // Pass opts as CompileOptions{} for default values.
 //
 // If err is of type [Error], it also has positional information.
-func Compile(filename string, src []byte, opts CompileOptions) (prog Segment, err error) {
+func Compile(src []byte, filename string, fs fs.FS, opts CompileOptions) (prog Segment, err error) {
 	defer func() {
 		if err != nil {
 			err = fmt.Errorf("compiling pattern: %w", err)
 		}
 	}()
-	var dir *os.Root
-	if filename != "" {
-		dir, err = os.OpenRoot(filepath.Dir(filename))
-		if err != nil {
-			return Segment{}, err
-		}
-	}
-	_, irSeg, err := parse(src, dir, opts.Vars, opts.Funcs)
+	_, irSeg, err := parse(src, filename, fs, opts.Vars, opts.Funcs)
 	if err != nil {
 		return Segment{}, err
 	}

@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"math"
-	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -117,8 +117,11 @@ type parser struct {
 	src []byte
 	i   int
 
-	// Directory to look for files in
-	dir *os.Root
+	lineOffsets []int
+
+	filename string
+	fs       fs.FS
+
 	// All functions and variables
 	funcs map[string]any
 	vars  map[string]IrSegment
@@ -134,7 +137,18 @@ type parser struct {
 
 // Makes the parser error at the last position.
 func (p *parser) err(e error) {
-	panic(&Error{Position: p.i - 1, Err: e})
+	pos := p.i - 1
+	// Locate the error with line and column
+	line, foundExact := slices.BinarySearch(p.lineOffsets, pos)
+	if !foundExact {
+		line--
+	}
+	var col int
+	if line < len(p.lineOffsets) {
+		col = pos - p.lineOffsets[line]
+	}
+
+	panic(&Error{Filename: p.filename, Line: line + 1, Column: col + 1, Err: e})
 }
 
 // If charset is empty, errors unconditionally with
@@ -514,22 +528,27 @@ func (p *parser) parseHashtagExpr() IrSegment {
 		funcCallErr := func(err error) {
 			p.err(fmt.Errorf("%w: %s: %w", ErrCallingFunc, name, err))
 		}
-		if name == "load" || name == "import" {
-			// Special functions "load" and "import" can't be handled
-			// like normal functions, since they modify the
-			// current parser instance.
+		if slices.Contains([]string{"load", "import", "wordlist"}, name) {
+			// Special functions can't be handled like normal
+			// functions, since they read files and may modify
+			// the current parser instance.
+			if p.fs == nil {
+				funcCallErr(errors.New("file loading not available if fs is not passed"))
+			}
+			dir := filepath.Dir(p.filename)
 			filename := args[0].(string)
-			data, err := p.dir.ReadFile(filename)
+			data, err := fs.ReadFile(p.fs, filepath.Join(dir, filename))
 			if err != nil {
 				funcCallErr(err)
 			}
-			root, err := p.dir.OpenRoot(filepath.Dir(filename))
-			if err != nil {
-				funcCallErr(err)
-			}
-			p1, seg, err := parse(data, root, p.initialVars, p.initialFuncs)
-			if err != nil {
-				funcCallErr(err)
+			var p1 *parser
+			var seg IrSegment
+			if name == "load" || name == "import" {
+				var err error
+				p1, seg, err = parse(data, filename, p.fs, p.initialVars, p.initialFuncs)
+				if err != nil {
+					funcCallErr(err)
+				}
 			}
 			switch name {
 			case "load":
@@ -546,24 +565,19 @@ func (p *parser) parseHashtagExpr() IrSegment {
 					p.newVars = append(p.newVars, vn)
 				}
 				return nil
+			case "wordlist":
+				var ws []IrSegment
+				for line := range bytes.SplitSeq(data, []byte("\n")) {
+					line = bytes.TrimSuffix(line, []byte("\r"))
+					if len(line) == 0 {
+						continue
+					}
+					ws = append(ws, IrSegmentStr(line))
+				}
+				return IrSegmentChoice(ws)
 			default:
 				panic("unhandled case")
 			}
-		} else if name == "wordlist" {
-			filename := args[0].(string)
-			b, err := p.dir.ReadFile(filename)
-			if err != nil {
-				funcCallErr(err)
-			}
-			var ws []IrSegment
-			for line := range bytes.SplitSeq(b, []byte("\n")) {
-				line = bytes.TrimSuffix(line, []byte("\r"))
-				if len(line) == 0 {
-					continue
-				}
-				ws = append(ws, IrSegmentStr(line))
-			}
-			return IrSegmentChoice(ws)
 		} else {
 			// Normal function call
 			vins := make([]reflect.Value, len(args))
@@ -732,7 +746,7 @@ func (p *parser) checkVarAndFuncNamesAndTypes() {
 	}
 }
 
-func parse(src []byte, dir *os.Root, extraVars map[string]IrSegment, extraFuncs map[string]any) (p *parser, irSeg IrSegment, err error) {
+func parse(src []byte, filename string, fs fs.FS, extraVars map[string]IrSegment, extraFuncs map[string]any) (p *parser, irSeg IrSegment, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if e, ok := r.(*Error); ok {
@@ -752,9 +766,22 @@ func parse(src []byte, dir *os.Root, extraVars map[string]IrSegment, extraFuncs 
 		}
 	}
 
+	// for error localization by offset
+	var lineOffsets []int
+	{
+		lineOffsets = append(lineOffsets, 0)
+		for i, c := range src {
+			if c == '\n' {
+				lineOffsets = append(lineOffsets, i+1)
+			}
+		}
+	}
+
 	p = &parser{
 		src:          src,
-		dir:          dir,
+		lineOffsets:  lineOffsets,
+		filename:     filename,
+		fs:           fs,
 		initialFuncs: make(map[string]any),
 		initialVars:  make(map[string]IrSegment),
 	}
