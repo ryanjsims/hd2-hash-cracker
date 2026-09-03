@@ -15,7 +15,7 @@ Fast GPU-based hash cracking for Helldivers 2, optimized for file paths.
 - `[a-z0-9~_-]`, `[^a-z]`: character classes mostly like in regex
 - `...{m,n}`, `...{m}`: repeat expression m-n times (`,n` can be omitted if `m == n`)
 - `...{m,n,s}`, `...{m,s}`: repeat expression m-n times, separated by s (`,n` can be omitted if `m == n` and if `s` doesn't start with a digit)
-- `#{var = ...}`: assign value of to variable `var`
+- `#{var = ...}`: assign value of ... to variable `var`
 - `#{var}`: expand value of variable `var`
 - `#{func arg1 arg2 ...}`: call function with arguments `arg1`, `arg2` etc.
 - operator precedences:
@@ -29,13 +29,14 @@ Fast GPU-based hash cracking for Helldivers 2, optimized for file paths.
         2. concatenation (e.g. `<...><...>`)
         3. or (`|`)
 
-### Builtin variable and functions
+### Builtin variables and functions
 - `#{load filename}`: loads pattern from file `filename` and returns it
 - `#{import filename}`: import variables from file `filename` (never returns a value)
 - `#{wordlist filename}`: import wordlist from file as or (`|`) expression
 - `#{split x delims}`: split each string in the or expression `x` into words by any of the characters in delims and return each deduplicated word
-- `#{filter x n}`: limit the or expression `x` to the first `n` elements
+- `#{limit x n}`: limit the or expression `x` to the first `n` elements
 - `#{filter x regex}`: filter the or expression `x` to only those that match `regex`
+- `#{remove x regex}`: like `filter`, but keeps the words that *don't* match `regex`
 
 ### Examples
 - `content/#{known-words}{1,3,[_:]}`: `content/` followed by 1-3 known words, separated by `_` or `:`
