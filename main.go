@@ -278,7 +278,7 @@ func run() error {
 	optMode := argp.String("m", "mode", &argparse.Option{
 		Choices: []any{"M", "m", "d"},
 		Default: "M",
-		Help:    "select type of hash to crack (M = murmurhash64a, m = murmurhash64a thin, d = datalib hash)",
+		Help:    "select type of hash to crack (M = murmurhash64a [default], m = murmurhash64a thin, d = datalib hash)",
 	})
 	optExpr := argp.Flag("e", "expr", &argparse.Option{
 		Help: "evaluate expression instead of input file",
@@ -289,7 +289,7 @@ func run() error {
 		Required:   true,
 	})
 	optHashes := argp.String("t", "target", &argparse.Option{
-		Help: "custom file listing target hashes to crack (default is builtin unknown hashes for selected mode)",
+		Help: "custom file listing target hashes to crack (default is builtin unknown HD2 hashes for selected mode)",
 	})
 	optOutput := argp.String("o", "output", &argparse.Option{
 		Help: "output file to append found hashes to (default is cracked.txt for murmur64a, cracked_thin.txt for murmur64a thin, or cracked_datalib.txt for datalib hash)",
