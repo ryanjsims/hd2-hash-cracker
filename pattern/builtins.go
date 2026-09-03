@@ -70,6 +70,21 @@ var builtinFuncs = map[string]any{
 			return
 		})
 	},
+	// Like filter, but removes all choices that fully match the given regex.
+	"remove": func(choices IrSegmentChoice, re string) (IrSegmentChoice, error) {
+		r, err := regexp.Compile("^" + re + "$") // HACK
+		if err != nil {
+			return nil, err
+		}
+		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
+			for _, s := range choices {
+				if !r.MatchString(s) {
+					res = append(res, IrSegmentStr(s))
+				}
+			}
+			return
+		})
+	},
 	// split splits each string in a choice of strings by any of the
 	// given delimiters. Eliminates any duplicates.
 	"split": func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error) {
