@@ -459,6 +459,7 @@ func generateClCode(s pattern.Segment, bufs *clBuffers) (code []byte) {
 		cb.L("#define HASH_FUNCTION datalib_hash_sum")
 	}
 	cb.L("#define IDX_LEN %d", bufs.idxLen)
+	cb.L("")
 	cb.L("%s", preludeClCode)
 
 	writeExprPushStr := func(cb *codeBuilder, memcpyFn, str string) {

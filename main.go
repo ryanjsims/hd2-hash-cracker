@@ -45,7 +45,7 @@ type cracker struct {
 	// End           //
 }
 
-func runCracker(ctx context.Context, patternSrc []byte, patternFilename string, patternFs fs.FS, mode pcl.HashMode, targetHashes []uint64) (newHashes []string, err error) {
+func runCracker(ctx context.Context, patternSrc []byte, patternFilename string, patternFs fs.FS, mode pcl.HashMode, targetHashes []uint64, writeClCode bool) (newHashes []string, err error) {
 	c := &cracker{
 		ctx:             ctx,
 		newUniqueHashes: make(map[string]struct{}),
@@ -62,7 +62,7 @@ func runCracker(ctx context.Context, patternSrc []byte, patternFilename string, 
 	var workerErr error
 	done := make(chan error)
 	go func() {
-		done <- crack(c, prog, mode, targetHashes)
+		done <- crack(c, prog, mode, targetHashes, writeClCode)
 		close(done)
 	}()
 
@@ -133,7 +133,7 @@ func (c *cracker) Status(format string, args ...any) {
 	c.mu.Unlock()
 }
 
-func crack(c *cracker, prog pattern.Segment, mode pcl.HashMode, targetHashes []uint64) error {
+func crack(c *cracker, prog pattern.Segment, mode pcl.HashMode, targetHashes []uint64, writeClCode bool) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -176,7 +176,12 @@ func crack(c *cracker, prog pattern.Segment, mode pcl.HashMode, targetHashes []u
 	}
 	defer cr.Delete()
 
-	//os.WriteFile("program.cl", []byte(cr.DebugInfo.OpenClCode), 0666)
+	if writeClCode {
+		if err := os.WriteFile("kernel.cl", []byte(cr.DebugInfo.OpenClCode), 0666); err != nil {
+			return err
+		}
+		c.Msg("wrote generated OpenCL code to kernel.cl")
+	}
 
 	c.Msg("Making guesses")
 	c.Status("Warming up / collecting baseline")
@@ -287,11 +292,13 @@ func run() error {
 		Help: "custom file listing target hashes to crack (default is builtin unknown hashes for selected mode)",
 	})
 	optOutput := argp.String("o", "output", &argparse.Option{
-		Help: "output file to append found hashes to (default is cracked.txt for murmur64a, or cracked_<mode>.txt otherwise)",
+		Help: "output file to append found hashes to (default is cracked.txt for murmur64a, cracked_thin.txt for murmur64a thin, or cracked_datalib.txt for datalib hash)",
 	})
-	optCpuProfile := argp.Flag("", "cpuprofile", &argparse.Option{
-		Help:      "write CPU profile",
-		HideEntry: true,
+	optCpuProfile := argp.Flag("", "debug-cpuprofile", &argparse.Option{
+		Help: "(debug) write CPU profile to file cpu.prof",
+	})
+	optWriteClCode := argp.Flag("", "debug-oclcode", &argparse.Option{
+		Help: "(debug) write generated OpenCL code to file kernel.cl",
 	})
 
 	if err := argp.Parse(nil); err != nil {
@@ -418,7 +425,7 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	newHashes, err := runCracker(ctx, patternSrc, patternFilename, patternRootFs.FS(), hashMode, targetHashes)
+	newHashes, err := runCracker(ctx, patternSrc, patternFilename, patternRootFs.FS(), hashMode, targetHashes, *optWriteClCode)
 	if err != nil {
 		return err
 	}
