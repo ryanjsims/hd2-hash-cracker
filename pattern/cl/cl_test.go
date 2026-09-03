@@ -42,7 +42,7 @@ func TestCl(t *testing.T) {
 	}
 
 	var allMatches []string
-	cr, err := pcl.NewCracker(device, prog, targetHashes, pcl.Options{})
+	cr, err := pcl.NewCracker(device, prog, pcl.HashMurmur64a, targetHashes, pcl.Options{})
 	require.NoError(err)
 	defer cr.Delete()
 	for {

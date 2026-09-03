@@ -11,6 +11,7 @@ Fast GPU-based hash cracking for Helldivers 2, optimized for file paths.
 - `<`, `>`: group inner contents together (works like parentheses)
 - `<a><b>` or `a<b>` etc.: concatenate a and b
 - `a|b|c`: a or b or c
+- newline is equivalent to `|`
 - `[a-z0-9~_-]`, `[^a-z]`: character classes mostly like in regex
 - `...{m,n}`, `...{m}`: repeat expression m-n times (`,n` can be omitted if `m == n`)
 - `...{m,n,s}`, `...{m,s}`: repeat expression m-n times, separated by s (`,n` can be omitted if `m == n` and if `s` doesn't start with a digit)

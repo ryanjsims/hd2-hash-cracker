@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"os/signal"
 	"runtime"
 	"runtime/pprof"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/xypwn/hd2-hash-cracker/hash"
 	"github.com/xypwn/hd2-hash-cracker/pattern"
 	pcl "github.com/xypwn/hd2-hash-cracker/pattern/cl"
+	"github.com/xypwn/hd2-hash-cracker/stdlib"
 	"github.com/xypwn/hd2-hash-cracker/util"
 )
 
@@ -42,13 +45,15 @@ type cracker struct {
 	// End           //
 }
 
-func runCracker(ctx context.Context, patternSrc []byte, patternFilename string, patternFs fs.FS, targetHashes []uint64) (newHashes []string, err error) {
+func runCracker(ctx context.Context, patternSrc []byte, patternFilename string, patternFs fs.FS, mode pcl.HashMode, targetHashes []uint64) (newHashes []string, err error) {
 	c := &cracker{
 		ctx:             ctx,
 		newUniqueHashes: make(map[string]struct{}),
 	}
 
-	prog, err := pattern.Compile(patternSrc, patternFilename, patternFs, pattern.CompileOptions{})
+	prog, err := pattern.Compile(patternSrc, patternFilename, patternFs, pattern.CompileOptions{
+		Vars: stdlib.Vars,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +62,7 @@ func runCracker(ctx context.Context, patternSrc []byte, patternFilename string, 
 	var workerErr error
 	done := make(chan error)
 	go func() {
-		done <- crack(c, prog, targetHashes)
+		done <- crack(c, prog, mode, targetHashes)
 		close(done)
 	}()
 
@@ -128,7 +133,7 @@ func (c *cracker) Status(format string, args ...any) {
 	c.mu.Unlock()
 }
 
-func crack(c *cracker, prog pattern.Segment, targetHashes []uint64) error {
+func crack(c *cracker, prog pattern.Segment, mode pcl.HashMode, targetHashes []uint64) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -165,7 +170,7 @@ func crack(c *cracker, prog pattern.Segment, targetHashes []uint64) error {
 	tuner := NewTuner(crackerOpts.Workers, crackerOpts.Tries)
 
 	c.Msg("Initializing buffers and compiling OpenCL kernel")
-	cr, err := pcl.NewCracker(device, prog, targetHashes, crackerOpts)
+	cr, err := pcl.NewCracker(device, prog, mode, targetHashes, crackerOpts)
 	if err != nil {
 		return err
 	}
@@ -191,7 +196,16 @@ func crack(c *cracker, prog pattern.Segment, targetHashes []uint64) error {
 		}
 
 		for _, s := range matches {
-			c.Msg("found: %016x = %s", hash.Murmur64aSum(s), s)
+			var hashHex string
+			switch mode {
+			case pcl.HashMurmur64a:
+				hashHex = fmt.Sprintf("%016x", hash.Murmur64aSum(s))
+			case pcl.HashMurmur64aThin:
+				hashHex = fmt.Sprintf("%08x", hash.Thin(hash.Murmur64aSum(s)))
+			case pcl.HashDatalib:
+				hashHex = fmt.Sprintf("%08x", hash.DatalibHashSum(s))
+			}
+			c.Msg("found: %s = %s", hashHex, s)
 		}
 
 		now := time.Now()
@@ -256,6 +270,11 @@ func run() error {
 	argp := argparse.NewParser("hd2-hash-cracker", "Helldivers 2 filename hash cracking tool", &argparse.ParserConfig{
 		EpiLog: epilog.String(),
 	})
+	optMode := argp.String("m", "mode", &argparse.Option{
+		Choices: []any{"M", "m", "d"},
+		Default: "M",
+		Help:    "select type of hash to crack (M = murmurhash64a, m = murmurhash64a thin, d = datalib hash)",
+	})
 	optExpr := argp.Flag("e", "expr", &argparse.Option{
 		Help: "evaluate expression instead of input file",
 	})
@@ -265,9 +284,7 @@ func run() error {
 		Required:   true,
 	})
 	optHashes := argp.String("t", "target", &argparse.Option{
-		Help:     "file listing target hashes to crack",
-		Default:  "hd2-patterns/target.txt",
-		Required: true,
+		Help: "custom file listing target hashes to crack (default is builtin unknown hashes for selected mode)",
 	})
 	optOutput := argp.String("o", "output", &argparse.Option{
 		Help:    "output file to append found hashes to",
@@ -283,6 +300,18 @@ func run() error {
 			return nil
 		}
 		return err
+	}
+
+	var hashMode pcl.HashMode
+	switch *optMode {
+	case "M":
+		hashMode = pcl.HashMurmur64a
+	case "m":
+		hashMode = pcl.HashMurmur64aThin
+	case "d":
+		hashMode = pcl.HashDatalib
+	default:
+		panic(fmt.Sprintf("unknown hash mode %q", *optMode))
 	}
 
 	if *optCpuProfile {
@@ -325,31 +354,72 @@ func run() error {
 
 	var targetHashes []uint64
 	{
-		b, err := os.ReadFile(*optHashes)
-		if err != nil {
-			return fmt.Errorf("reading target hashes file: %w", err)
+		var data []byte
+		if *optHashes != "" {
+			var err error
+			data, err = os.ReadFile(*optHashes)
+			if err != nil {
+				return fmt.Errorf("reading target hashes file: %w", err)
+			}
+		} else {
+			switch hashMode {
+			case pcl.HashMurmur64a:
+				data = stdlib.TargetHashesMurmur64a
+			case pcl.HashMurmur64aThin:
+				data = stdlib.TargetHashesMurmur64aThin
+			case pcl.HashDatalib:
+				data = stdlib.TargetHashesDatalib
+			}
 		}
-		for line := range bytes.SplitSeq(b, []byte("\n")) {
+		for line := range bytes.SplitSeq(data, []byte("\n")) {
 			line = bytes.TrimSuffix(line, []byte("\r"))
 			if len(line) == 0 {
 				continue
 			}
+			if bytes.HasPrefix(line, []byte("//")) || bytes.HasPrefix(line, []byte("#")) {
+				continue
+			}
 
-			h, err := hash.Parse64(string(line))
+			var h uint64
+			var err error
+			switch hashMode.Bits() {
+			case 64:
+				h, err = hash.Parse64(string(line))
+			case 32:
+				var h32 uint32
+				h32, err = hash.Parse32(string(line))
+				h = uint64(h32)
+			}
 			if err != nil {
-				return fmt.Errorf("parsing target hash: %w", err)
+				var sfx string
+				if errors.Is(err, strconv.ErrRange) && hashMode.Bits() == 32 {
+					sfx = " (it looks like you selected a 32-bit hash, but gave a 64-bit hash list)"
+				}
+				return fmt.Errorf("parsing target hash: %w%s", err, sfx)
 			}
 			targetHashes = append(targetHashes, h)
 		}
 		slices.Sort(targetHashes)
 		util.Uniq(targetHashes)
+		if hashMode.Bits() == 64 {
+			all32Bit := true
+			for _, h := range targetHashes {
+				if h > math.MaxUint32 {
+					all32Bit = false
+					break
+				}
+			}
+			if len(targetHashes) > 0 && all32Bit {
+				cli.Error("All target hashes look like they're 32-bit, but you have selected a 64-bit hash mode. Please ensure that you gave the correct hash list.")
+			}
+		}
 	}
 
 	cli.Print("Ctrl+C to quit")
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	newHashes, err := runCracker(ctx, patternSrc, patternFilename, patternRootFs.FS(), targetHashes)
+	newHashes, err := runCracker(ctx, patternSrc, patternFilename, patternRootFs.FS(), hashMode, targetHashes)
 	if err != nil {
 		return err
 	}

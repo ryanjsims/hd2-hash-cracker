@@ -2,6 +2,7 @@ package pattern
 
 import (
 	"bytes"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -42,6 +43,13 @@ type (
 		Min, Max int
 	} // <something{1,2}>
 )
+
+func init() {
+	gob.Register(IrSegmentChoice{})
+	gob.Register(IrSegmentConcat{})
+	gob.Register(IrSegmentStr(""))
+	gob.Register(IrSegmentRepeat{})
+}
 
 func (s IrSegmentChoice) private() {}
 func (s IrSegmentConcat) private() {}
@@ -684,7 +692,6 @@ func (p *parser) parseExpr(endingDelims string) IrSegment {
 			p.next()
 			p.expectLast("{")
 			seg := p.parseHashExpr()
-			fmt.Println("ret", seg)
 			if seg != nil {
 				segParts = append(segParts, seg)
 			} else {

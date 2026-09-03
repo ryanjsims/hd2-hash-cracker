@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"iter"
+	"maps"
 	"math"
 	"math/big"
 	"slices"
@@ -19,8 +20,11 @@ type CompileOptions struct {
 	//
 	// Return value must be an IrSegment and optionally an error.
 	Funcs map[string]any
-	//
+	// Additional variable values.
 	Vars map[string]IrSegment
+	// Output variables (optionally used to return variables the pattern acquired
+	// during parsing).
+	OutVars *map[string]IrSegment
 	// Don't apply optimizations (mostly meant for debugging,
 	// you usually want to leave this set to false).
 	NoOptimize bool
@@ -489,7 +493,7 @@ func Compile(src []byte, filename string, fs fs.FS, opts CompileOptions) (prog S
 			err = fmt.Errorf("compiling pattern: %w", err)
 		}
 	}()
-	_, irSeg, err := parse(src, filename, fs, opts.Vars, opts.Funcs)
+	p, irSeg, err := parse(src, filename, fs, opts.Vars, opts.Funcs)
 	if err != nil {
 		return Segment{}, err
 	}
@@ -504,6 +508,9 @@ func Compile(src []byte, filename string, fs fs.FS, opts CompileOptions) (prog S
 			ErrComplexityTooLarge,
 			comp,
 			comp/float64(seg.Comp))
+	}
+	if opts.OutVars != nil {
+		*opts.OutVars = maps.Clone(p.vars)
 	}
 	return seg, nil
 }

@@ -16,6 +16,38 @@ import (
 //go:embed prelude.cl
 var preludeClCode string
 
+type HashMode int
+
+const (
+	HashMurmur64a = iota
+	HashMurmur64aThin
+	HashDatalib
+)
+
+func (m HashMode) String() string {
+	switch m {
+	case HashMurmur64a:
+		return "murmurhash 64a"
+	case HashMurmur64aThin:
+		return "murmurhash 64a thin"
+	case HashDatalib:
+		return "datalib"
+	default:
+		panic("unhandled case")
+	}
+}
+
+func (m HashMode) Bits() int {
+	switch m {
+	case HashMurmur64a:
+		return 64
+	case HashMurmur64aThin, HashDatalib:
+		return 32
+	default:
+		panic("unhandled case")
+	}
+}
+
 // Returns the number of elements needed in the index
 // for the given program.
 func getSegmentIdxLen(s pattern.Segment) int {
@@ -46,6 +78,7 @@ func readIdx(dest []uint32, s pattern.Segment, idx pattern.SegIdx) int {
 }
 
 type clBuffers struct {
+	hashMode         HashMode
 	strArrs          [][]string
 	strArrsFirstIdxs []int
 	numWorkers       int
@@ -53,21 +86,40 @@ type clBuffers struct {
 	matchBufLen      int
 	maxCandidateLen  int
 	bs               struct { // buffers
-		tries        cl.BackedBuffer[uint32]
-		idxs         cl.BackedBuffer[uint32]
-		strs         cl.BackedBuffer[byte]
-		strsOffsets  cl.BackedBuffer[uint32]
-		strLens      cl.BackedBuffer[uint32]
-		hashBitmap   cl.BackedBuffer[uint32]
-		targetHashes cl.BackedBuffer[uint64]
-		matchFound   cl.BackedBuffer[int32] // len always 1
-		matches      cl.BackedBuffer[byte]
-		matchesLens  cl.BackedBuffer[uint32]
+		tries          cl.BackedBuffer[uint32]
+		idxs           cl.BackedBuffer[uint32]
+		strs           cl.BackedBuffer[byte]
+		strsOffsets    cl.BackedBuffer[uint32]
+		strLens        cl.BackedBuffer[uint32]
+		hashBitmap     cl.BackedBuffer[uint32]
+		targetHashes32 cl.BackedBuffer[uint32]
+		targetHashes64 cl.BackedBuffer[uint64]
+		matchFound     cl.BackedBuffer[int32] // len always 1
+		matches        cl.BackedBuffer[byte]
+		matchesLens    cl.BackedBuffer[uint32]
 	}
 }
 
-func makeClBuffers(context cl.Context, s pattern.Segment, targetHashes []uint64, numWorkers, matchBufLen int) (*clBuffers, error) {
+func makeClBuffers(context cl.Context, s pattern.Segment, hashMode HashMode, targetHashes []uint64, numWorkers, matchBufLen int) (*clBuffers, error) {
+	var targetHashes32 []uint32
+	var targetHashes64 []uint64
+	switch hashMode.Bits() {
+	case 32:
+		targetHashes32 = make([]uint32, len(targetHashes))
+		for i, h := range targetHashes {
+			if h > math.MaxUint32 {
+				return nil, fmt.Errorf("expected 32-bit-only hashes for mode %s, but got 64-bit hash 0x%016x", hashMode.String(), h)
+			}
+			targetHashes32[i] = uint32(h)
+		}
+	case 64:
+		targetHashes64 = slices.Clone(targetHashes)
+	default:
+		panic("unhandled target hash bits")
+	}
+
 	b := &clBuffers{
+		hashMode:        hashMode,
 		numWorkers:      numWorkers,
 		idxLen:          getSegmentIdxLen(s),
 		matchBufLen:     matchBufLen,
@@ -145,9 +197,14 @@ func makeClBuffers(context cl.Context, s pattern.Segment, targetHashes []uint64,
 	}
 
 	// Prepare target hash array (sort and dedupe).
-	targetHashes = slices.Clone(targetHashes) // don't modify the input slice
-	slices.Sort(targetHashes)
-	targetHashes = util.Uniq(targetHashes)
+	switch hashMode.Bits() {
+	case 32:
+		slices.Sort(targetHashes32)
+		targetHashes32 = util.Uniq(targetHashes32)
+	case 64:
+		slices.Sort(targetHashes64)
+		targetHashes64 = util.Uniq(targetHashes64)
+	}
 
 	// Create hash bitmap (bloom filter)
 	var hashBitmap []uint32
@@ -156,13 +213,15 @@ func makeClBuffers(context cl.Context, s pattern.Segment, targetHashes []uint64,
 		hashBitmap = make([]uint32, 1<<(BITS-4))
 		for _, h := range targetHashes {
 			hl := uint32(h)
-			hh := uint32(h >> 32)
 			idxl := hl >> (32 - (BITS - 4))
 			bitl := uint32(1) << (hl & 31)
 			hashBitmap[idxl] |= bitl
-			idxh := hh >> (32 - (BITS - 4))
-			bith := uint32(1) << (hh & 31)
-			hashBitmap[idxh] |= bith
+			if hashMode.Bits() == 64 {
+				hh := uint32(h >> 32)
+				idxh := hh >> (32 - (BITS - 4))
+				bith := uint32(1) << (hh & 31)
+				hashBitmap[idxh] |= bith
+			}
 		}
 	}
 
@@ -188,7 +247,12 @@ func makeClBuffers(context cl.Context, s pattern.Segment, targetHashes []uint64,
 		if err != nil {
 			return nil, fmt.Errorf("creating hash bitmap buffer: %w", err)
 		}
-		b.bs.targetHashes, err = cl.CreateBackedBuffer(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, targetHashes)
+		switch hashMode.Bits() {
+		case 64:
+			b.bs.targetHashes64, err = cl.CreateBackedBuffer(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, targetHashes64)
+		case 32:
+			b.bs.targetHashes32, err = cl.CreateBackedBuffer(context, cl.MEM_READ_ONLY|cl.MEM_COPY_HOST_PTR, targetHashes32)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("creating target hash buffer: %w", err)
 		}
@@ -228,7 +292,12 @@ func (b *clBuffers) Delete() {
 	b.bs.strsOffsets.Release()
 	b.bs.strLens.Release()
 	b.bs.hashBitmap.Release()
-	b.bs.targetHashes.Release()
+	switch b.hashMode.Bits() {
+	case 64:
+		b.bs.targetHashes64.Release()
+	case 32:
+		b.bs.targetHashes32.Release()
+	}
 	b.bs.matchFound.Release()
 	b.bs.matches.Release()
 	b.bs.matchesLens.Release()
@@ -373,7 +442,22 @@ func generateClCode(s pattern.Segment, bufs *clBuffers) (code []byte) {
 	cb := &codeBuilder{IndentStr: "  "}
 	cb.L("#define MAX_CANDIDATE_LEN %d", bufs.maxCandidateLen)
 	cb.L("#define MAX_MATCH_BUF_LEN %d", bufs.matchBufLen)
-	cb.L("#define NUM_TARGET_HASHES %d", len(bufs.bs.targetHashes.Items))
+	switch bufs.hashMode.Bits() {
+	case 64:
+		cb.L("#define NUM_TARGET_HASHES %d", len(bufs.bs.targetHashes64.Items))
+		cb.L("#define HASH_BITS 64")
+	case 32:
+		cb.L("#define NUM_TARGET_HASHES %d", len(bufs.bs.targetHashes32.Items))
+		cb.L("#define HASH_BITS 32")
+	}
+	switch bufs.hashMode {
+	case HashMurmur64a:
+		cb.L("#define HASH_FUNCTION murmur64a_sum")
+	case HashMurmur64aThin:
+		cb.L("#define HASH_FUNCTION murmur64a_thin_sum")
+	case HashDatalib:
+		cb.L("#define HASH_FUNCTION datalib_hash_sum")
+	}
 	cb.L("#define IDX_LEN %d", bufs.idxLen)
 	cb.L("%s", preludeClCode)
 
@@ -389,7 +473,7 @@ func generateClCode(s pattern.Segment, bufs *clBuffers) (code []byte) {
 		fnIdx := len(guessFns)
 		name = fmt.Sprintf("guess_%d", fnIdx)
 		cb = &codeBuilder{IndentStr: "  "}
-		cb.L("bool %s(size_t id, u32 *n, u32 *i, u64 *candidate, i32 candidate_len, __global const char *strs, __global const u32 *strs_offsets, __global const u32 *str_lens, __global const u32 *hash_bitmap, __global const u64 *target_hashes, __global char *matches, __global u32 *matches_lens) {", name)
+		cb.L("bool %s(size_t id, u32 *n, u32 *i, u64 *candidate, i32 candidate_len, __global const char *strs, __global const u32 *strs_offsets, __global const u32 *str_lens, __global const u32 *hash_bitmap, __global const hash_t *target_hashes, __global char *matches, __global u32 *matches_lens) {", name)
 		guessFns = append(guessFns, cb)
 		return
 	}
@@ -487,7 +571,7 @@ func generateClCode(s pattern.Segment, bufs *clBuffers) (code []byte) {
 		cb.L("%s", fcb.B.String())
 	}
 
-	cb.L(`__kernel void kmain(__global u32* tries, __global u32* idxs, __global const char *strs, __global const u32 *strs_offsets, __global const u32 *str_lens, __global const u32 *hash_bitmap, __global const u64 *target_hashes, __global int *match_found, __global char *matches, __global u32 *matches_lens) {`)
+	cb.L(`__kernel void kmain(__global u32* tries, __global u32* idxs, __global const char *strs, __global const u32 *strs_offsets, __global const u32 *str_lens, __global const u32 *hash_bitmap, __global const hash_t *target_hashes, __global int *match_found, __global char *matches, __global u32 *matches_lens) {`)
 	cb.L("size_t id = get_global_id(0);")
 	cb.L("u32 n = tries[id]; // number of tries left")
 	cb.L("u64 candidate[(MAX_CANDIDATE_LEN+7)/8]; // using u64 to force correct alignment to be able to speed up murmurhash algorithm")

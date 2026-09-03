@@ -72,6 +72,16 @@ func Thin(hash uint64) uint32 {
 	return uint32(hash >> 32)
 }
 
+func DatalibHashSum[T ~[]byte | string](data T) uint32 {
+	b := []byte(data)
+	hash := uint32(5381)
+	for _, c := range b {
+		hash = hash*33 + uint32(c)
+	}
+	hash -= 5381
+	return hash
+}
+
 // Parse64 parses a big endian 64-bit
 // unsigned integer with optional 0x prefix.
 func Parse64(s string) (uint64, error) {

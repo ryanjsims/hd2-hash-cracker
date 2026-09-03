@@ -28,6 +28,7 @@ type Cracker struct {
 
 	newWorkers int
 
+	hashMode              HashMode
 	device                cl.DeviceId
 	context               cl.Context
 	queue                 cl.CommandQueue
@@ -40,7 +41,7 @@ type Cracker struct {
 	lastKernelRunDuration time.Duration
 }
 
-func NewCracker(device cl.DeviceId, prog pattern.Segment, targetHashes []uint64, opts Options) (_ *Cracker, err error) {
+func NewCracker(device cl.DeviceId, prog pattern.Segment, mode HashMode, targetHashes []uint64, opts Options) (_ *Cracker, err error) {
 	if opts.Workers == 0 {
 		opts.Workers = 4096
 	}
@@ -51,9 +52,10 @@ func NewCracker(device cl.DeviceId, prog pattern.Segment, targetHashes []uint64,
 		opts.Tries = 65536
 	}
 	c := &Cracker{
-		prog: prog,
-		idx:  prog.MakeIndex(),
-		opts: opts,
+		hashMode: mode,
+		prog:     prog,
+		idx:      prog.MakeIndex(),
+		opts:     opts,
 	}
 	defer func() {
 		if err != nil {
@@ -71,7 +73,7 @@ func NewCracker(device cl.DeviceId, prog pattern.Segment, targetHashes []uint64,
 
 	matchBufLen := opts.MinMatchBufLen
 	matchBufLen = max(matchBufLen, 2*(prog.MaxLen()+1))
-	c.bufs, err = makeClBuffers(c.context, prog, targetHashes, opts.Workers, matchBufLen)
+	c.bufs, err = makeClBuffers(c.context, prog, mode, targetHashes, opts.Workers, matchBufLen)
 	if err != nil {
 		return nil, fmt.Errorf("creating buffers: %w", err)
 	}
@@ -121,10 +123,19 @@ func (c *Cracker) Delete() {
 }
 
 func (c *Cracker) setKernelArgValues() error {
+	var targetHashesMem cl.Mem
+	switch c.hashMode.Bits() {
+	case 64:
+		targetHashesMem = c.bufs.bs.targetHashes64.Mem
+	case 32:
+		targetHashesMem = c.bufs.bs.targetHashes32.Mem
+	default:
+		panic("invalid hash mod bit size")
+	}
 	if err := cl.SetKernelArgValues(c.kernel, 0,
 		c.bufs.bs.tries.Mem, c.bufs.bs.idxs.Mem,
 		c.bufs.bs.strs.Mem, c.bufs.bs.strsOffsets.Mem, c.bufs.bs.strLens.Mem,
-		c.bufs.bs.hashBitmap.Mem, c.bufs.bs.targetHashes.Mem,
+		c.bufs.bs.hashBitmap.Mem, targetHashesMem,
 		c.bufs.bs.matchFound.Mem, c.bufs.bs.matches.Mem, c.bufs.bs.matchesLens.Mem); err != nil {
 		return fmt.Errorf("setting arg values: %w", err)
 	}
