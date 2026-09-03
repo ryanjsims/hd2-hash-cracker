@@ -21,7 +21,7 @@ func TestParse(t *testing.T) {
 				},
 				IrSegmentStr("cd"),
 			}, ""},
-		{"repeat", "<a|b>{5,10}",
+		{"repeat 1", "<a|b>{5,10}",
 			IrSegmentRepeat{
 				Seg: IrSegmentChoice{
 					IrSegmentStr("a"),
@@ -30,7 +30,7 @@ func TestParse(t *testing.T) {
 				Min: 5,
 				Max: 10,
 			}, ""},
-		{"repeat 1", "<a|b>{10}",
+		{"repeat 2", "<a|b>{10}",
 			IrSegmentRepeat{
 				Seg: IrSegmentChoice{
 					IrSegmentStr("a"),
@@ -39,7 +39,7 @@ func TestParse(t *testing.T) {
 				Min: 10,
 				Max: 10,
 			}, ""},
-		{"repeat sep", "<a|b>{5,10,<c|d>}",
+		{"repeat sep 1", "<a|b>{5,10,<c|d>}",
 			IrSegmentRepeat{
 				Seg: IrSegmentChoice{
 					IrSegmentStr("a"),
@@ -52,13 +52,55 @@ func TestParse(t *testing.T) {
 					IrSegmentStr("d"),
 				},
 			}, ""},
+		{"repeat sep 2", "a{5,<c|d>}",
+			IrSegmentRepeat{
+				Seg: IrSegmentStr("a"),
+				Min: 5,
+				Max: 5,
+				Sep: IrSegmentChoice{
+					IrSegmentStr("c"),
+					IrSegmentStr("d"),
+				},
+			}, ""},
+		{"char class", "[a-f]",
+			IrSegmentChoice{
+				IrSegmentStr("a"), IrSegmentStr("b"), IrSegmentStr("c"), IrSegmentStr("d"), IrSegmentStr("e"), IrSegmentStr("f"),
+			}, ""},
 		{"repeat invalid range", "<a|b>{10,5}", nil,
-			"pattern error at position 11: expected minimum repetitions (10) to be less than maximum (5) repetitions"},
+			"pattern error at test.pat:1:11: expected minimum repetitions (10) to be less than maximum (5) repetitions"},
+		{"empty string 1", "<|b>cd",
+			IrSegmentConcat{
+				IrSegmentChoice{
+					IrSegmentStr(""),
+					IrSegmentStr("b"),
+				},
+				IrSegmentStr("cd"),
+			}, ""},
+		{"empty string 2", "a<>",
+			IrSegmentStr("a"),
+			""},
+		{"empty string 3", "#{produce-nil}|a",
+			IrSegmentStr("a"),
+			""},
+		{"empty string 4", "#{produce-nil}a",
+			IrSegmentStr("a"),
+			""},
+		{"empty string 5", "#{produce-empty-str}|a",
+			IrSegmentChoice{IrSegmentStr(""), IrSegmentStr("a")},
+			""},
+	}
+	funcs := map[string]any{
+		"produce-nil": func() IrSegment {
+			return nil
+		},
+		"produce-empty-str": func() IrSegment {
+			return IrSegmentStr("")
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			require := require.New(t)
-			_, irSeg, err := parse([]byte(c.expr), "", nil, nil, nil)
+			_, irSeg, err := parse([]byte(c.expr), "test.pat", nil, nil, funcs)
 			if c.wantErr == "" {
 				require.NoError(err)
 			} else {

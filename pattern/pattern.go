@@ -53,7 +53,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return fmt.Sprintf("pattern error at position %s:%d:%d: %v", e.Filename, e.Line, e.Column, e.Err)
+	return fmt.Sprintf("pattern error at %s:%d:%d: %v", e.Filename, e.Line, e.Column, e.Err)
 }
 
 func (e *Error) Unwrap() error {

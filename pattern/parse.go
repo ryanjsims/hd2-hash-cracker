@@ -390,11 +390,12 @@ func (p *parser) parseString() string {
 	return s.String()
 }
 
-// Evaluates an assignment, variable read or function
-// call. Returns the resulting value.
+// Evaluates a #-expression, i.e. an assignment, variable read
+// or function call. Returns the resulting value.
 //
-// May return nil, indicating no produced value.
-func (p *parser) parseHashtagExpr() IrSegment {
+// May return nil, indicating no produced value (which should
+// be treated separately from an empty string!).
+func (p *parser) parseHashExpr() IrSegment {
 	var nameB strings.Builder
 	for {
 		c := p.next()
@@ -572,6 +573,9 @@ func (p *parser) parseHashtagExpr() IrSegment {
 					if len(line) == 0 {
 						continue
 					}
+					if bytes.HasPrefix(line, []byte("//")) || bytes.HasPrefix(line, []byte("#")) {
+						continue
+					}
 					ws = append(ws, IrSegmentStr(line))
 				}
 				return IrSegmentChoice(ws)
@@ -597,8 +601,7 @@ func (p *parser) parseHashtagExpr() IrSegment {
 }
 
 func (p *parser) parseExpr(endingDelims string) IrSegment {
-	var segStr strings.Builder
-
+	var segStr bytes.Buffer
 	// General hierarchy constructed here is:
 	// segment = choice of parts of segment
 	// example: <a>b{2}|c
@@ -606,34 +609,49 @@ func (p *parser) parseExpr(endingDelims string) IrSegment {
 	// where:
 	//   choice is an ordered set
 	//   parts is a concatenation
-	var seg IrSegment
 	var segParts []IrSegment
 	var segChoices []IrSegment
-	flushSegStr := func() {
-		if segStr.Len() == 0 {
-			return
-		}
-		str := strings.Clone(segStr.String())
-		seg = IrSegmentStr(str)
+
+	// Set to true after a nil-returning #-expression, since
+	// we don't want to count a non-returning function call
+	// as an empty string.
+	ignoreChoiceElemIfEmpty := false
+
+	flushSegPart := func() { // flush current concatenation item
+		seg := IrSegmentStr(segStr.String())
 		segStr.Reset()
+		segParts = append(segParts, seg)
 	}
-	flushSegPart := func() {
-		flushSegStr()
-		if seg != nil {
-			segParts = append(segParts, seg)
-		}
-		seg = nil
-	}
-	flushSegChoice := func() {
+	flushSegChoice := func() { // flush current choice (`|`) item
 		flushSegPart()
-		if len(segParts) > 0 {
-			if len(segParts) == 1 {
-				segChoices = append(segChoices, segParts[0])
+		segIsEmptyStr := func(seg IrSegment) bool {
+			s, ok := seg.(IrSegmentStr)
+			return ok && s == ""
+		}
+		partsContainsNonEmptyStr := slices.ContainsFunc(segParts,
+			func(seg IrSegment) bool { return !segIsEmptyStr(seg) })
+		if !partsContainsNonEmptyStr { // parts contains only empty strings
+			if ignoreChoiceElemIfEmpty {
+				segParts = nil
 			} else {
-				segChoices = append(segChoices, IrSegmentConcat(segParts))
+				segParts = []IrSegment{IrSegmentStr("")}
 			}
 		}
+		if partsContainsNonEmptyStr {
+			// If we have a concatenation with at least one non-empty segment,
+			// we can delete all empty strings (e.g. "a"+"" == "a"). Note that
+			// we cannot do this if the entire choice item is empty (e.g. <"a"|>
+			// != "a"), as that would just swallow up the choice of empty string.
+			segParts = slices.DeleteFunc(segParts, segIsEmptyStr)
+		}
+		if len(segParts) == 0 {
+		} else if len(segParts) == 1 {
+			segChoices = append(segChoices, segParts[0])
+		} else {
+			segChoices = append(segChoices, IrSegmentConcat(segParts))
+		}
 		segParts = nil
+		ignoreChoiceElemIfEmpty = false
 	}
 
 	for {
@@ -654,20 +672,28 @@ func (p *parser) parseExpr(endingDelims string) IrSegment {
 			flushSegChoice()
 		case '<':
 			flushSegPart()
-			seg = p.parseExpr(">")
+			if seg := p.parseExpr(">"); seg != nil {
+				segParts = append(segParts, seg)
+			}
 		case '[':
 			flushSegPart()
-			seg = p.parseCharClass()
+			seg := p.parseCharClass()
+			segParts = append(segParts, seg)
 		case '#':
 			flushSegPart()
 			p.next()
 			p.expectLast("{")
-			newSeg := p.parseHashtagExpr()
-			if newSeg != nil {
-				seg = newSeg
+			seg := p.parseHashExpr()
+			fmt.Println("ret", seg)
+			if seg != nil {
+				segParts = append(segParts, seg)
+			} else {
+				ignoreChoiceElemIfEmpty = true
 			}
 		case '{':
-			flushSegPart()
+			if segStr.Len() != 0 {
+				flushSegPart()
+			}
 			if len(segParts) == 0 {
 				p.err(ErrExpectedExpressionBeforeRepeat)
 			}
@@ -675,9 +701,6 @@ func (p *parser) parseExpr(endingDelims string) IrSegment {
 			rs.Seg = segParts[len(segParts)-1]
 			segParts[len(segParts)-1] = rs
 		default:
-			if seg != nil {
-				flushSegPart()
-			}
 			segStr.WriteByte(c)
 		}
 	}
