@@ -35,8 +35,8 @@ Fast GPU-based hash cracking for Helldivers 2, optimized for file paths.
 - `#{wordlist filename}`: import wordlist from file as or (`|`) expression
 - `#{split x delims}`: split each string in the or expression `x` into words by any of the characters in delims and return each deduplicated word
 - `#{limit x n}`: limit the or expression `x` to the first `n` elements
-- `#{filter x regex}`: filter the or expression `x` to only those that match `regex`
-- `#{remove x regex}`: like `filter`, but keeps the words that *don't* match `regex`
+- `#{filter x regex}`: filter the or expression `x` to only the elements that match `regex`
+- `#{remove x regex}`: like `filter`, but keeps the elements that *don't* match `regex`
 
 ### Examples
 - `content/#{known-words}{1,3,[_:]}`: `content/` followed by 1-3 known words, separated by `_` or `:`
