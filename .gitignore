@@ -1,5 +1,7 @@
 /cpu.prof
 /cracked.txt
+/cracked_thin.txt
+/cracked_datalib.txt
 /example.pat
 /target.txt
 /testdata/fuzz

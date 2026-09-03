@@ -287,8 +287,7 @@ func run() error {
 		Help: "custom file listing target hashes to crack (default is builtin unknown hashes for selected mode)",
 	})
 	optOutput := argp.String("o", "output", &argparse.Option{
-		Help:    "output file to append found hashes to",
-		Default: "cracked.txt",
+		Help: "output file to append found hashes to (default is cracked.txt for murmur64a, or cracked_<mode>.txt otherwise)",
 	})
 	optCpuProfile := argp.Flag("", "cpuprofile", &argparse.Option{
 		Help:      "write CPU profile",
@@ -426,8 +425,19 @@ func run() error {
 
 	// Write back new hash strings to output file by appending and deduplicating
 	{
-		cli.Print("Adding %d hashes to %s", len(newHashes), *optOutput)
-		b, err := os.ReadFile(*optOutput)
+		outputFile := *optOutput
+		if outputFile == "" {
+			switch hashMode {
+			case pcl.HashMurmur64a:
+				outputFile = "cracked.txt"
+			case pcl.HashMurmur64aThin:
+				outputFile = "cracked_thin.txt"
+			case pcl.HashDatalib:
+				outputFile = "cracked_datalib.txt"
+			}
+		}
+		cli.Print("Adding %d hashes to %s", len(newHashes), outputFile)
+		b, err := os.ReadFile(outputFile)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -444,7 +454,7 @@ func run() error {
 		}
 		slices.SortFunc(lines, bytes.Compare)
 		util.UniqFunc(lines, bytes.Equal)
-		if err := os.WriteFile(*optOutput, bytes.Join(lines, []byte("\n")), 0666); err != nil {
+		if err := os.WriteFile(outputFile, bytes.Join(lines, []byte("\n")), 0666); err != nil {
 			return err
 		}
 	}
