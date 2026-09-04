@@ -460,7 +460,7 @@ func run() error {
 			lines = append(lines, []byte(h))
 		}
 		slices.SortFunc(lines, bytes.Compare)
-		util.UniqFunc(lines, bytes.Equal)
+		lines = util.UniqFunc(lines, bytes.Equal)
 		if err := os.WriteFile(outputFile, bytes.Join(lines, []byte("\n")), 0666); err != nil {
 			return err
 		}
