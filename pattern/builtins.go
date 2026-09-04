@@ -93,6 +93,20 @@ var builtinFuncs = map[string]any{
 			return
 		})
 	},
+	// For each item, replace replaces all matches of the given regex with the given replacement pattern
+	// (e.g. $1 for capture group 1, $name for named capture group).
+	"replace": func(choices IrSegmentChoice, re, repl string) (IrSegmentChoice, error) {
+		r, err := regexp.Compile(re)
+		if err != nil {
+			return nil, err
+		}
+		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
+			for _, s := range choices {
+				res = append(res, IrSegmentStr(r.ReplaceAllString(s, repl)))
+			}
+			return
+		})
+	},
 	// split splits each string in a choice of strings by any of the
 	// given delimiters. Eliminates any duplicates.
 	"split": func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error) {
