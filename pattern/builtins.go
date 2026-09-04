@@ -48,6 +48,24 @@ func builtinHelperTransformChoiceOfStrings(
 	return IrSegmentChoice(newChoices), nil
 }
 
+func builtinHelperDedupeChoiceOfStrings(choices []IrSegment) []IrSegment {
+	seen := make(map[string]struct{})
+	j := 0
+	for i := range choices {
+		s := string(choices[i].(IrSegmentStr))
+		if _, exists := seen[s]; exists {
+			continue
+		}
+		if j != i {
+			choices[j] = IrSegmentStr(s)
+		}
+		j++
+		seen[s] = struct{}{}
+	}
+	clear(choices[j:])
+	return choices[:j]
+}
+
 var builtinFuncs = map[string]any{
 	// limit limits the number of choices to at most n, where
 	// n must be a non-negative number.
@@ -94,7 +112,7 @@ var builtinFuncs = map[string]any{
 		})
 	},
 	// For each item, replace replaces all matches of the given regex with the given replacement pattern
-	// (e.g. $1 for capture group 1, $name for named capture group).
+	// (e.g. $1 for capture group 1, $name for named capture group). Eliminates any duplicates.
 	"replace": func(choices IrSegmentChoice, re, repl string) (IrSegmentChoice, error) {
 		r, err := regexp.Compile(re)
 		if err != nil {
@@ -102,8 +120,10 @@ var builtinFuncs = map[string]any{
 		}
 		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
 			for _, s := range choices {
-				res = append(res, IrSegmentStr(r.ReplaceAllString(s, repl)))
+				s := r.ReplaceAllString(s, repl)
+				res = append(res, IrSegmentStr(s))
 			}
+			res = builtinHelperDedupeChoiceOfStrings(res)
 			return
 		})
 	},
@@ -111,16 +131,12 @@ var builtinFuncs = map[string]any{
 	// given delimiters. Eliminates any duplicates.
 	"split": func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error) {
 		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
-			seen := make(map[string]struct{})
 			for _, choice := range choices {
 				for s := range util.SplitStringAnySeq(choice, delims) {
-					if _, exists := seen[s]; exists {
-						continue
-					}
-					seen[s] = struct{}{}
 					res = append(res, IrSegmentStr(s))
 				}
 			}
+			res = builtinHelperDedupeChoiceOfStrings(res)
 			return
 		})
 	},
@@ -129,8 +145,6 @@ var builtinFuncs = map[string]any{
 	// Example: <a/b/c|0/1|a/b_d> -> <a|a/b|a/b/c|0|0/1|a/b_d>
 	"prefixes": func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error) {
 		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
-			seen := make(map[string]struct{})
-			seen[""] = struct{}{}
 			for _, s := range choices {
 				sp := util.SplitStringAfterAny(s, delims)
 				for i := 1; i <= len(sp); i++ {
@@ -138,13 +152,13 @@ var builtinFuncs = map[string]any{
 					if len(pfx) > 0 && strings.ContainsRune(delims, rune(pfx[len(pfx)-1])) {
 						pfx = pfx[:len(pfx)-1]
 					}
-					if _, ok := seen[pfx]; ok {
+					if pfx == "" {
 						continue
 					}
 					res = append(res, IrSegmentStr(pfx))
-					seen[pfx] = struct{}{}
 				}
 			}
+			res = builtinHelperDedupeChoiceOfStrings(res)
 			return
 		})
 	},
@@ -153,19 +167,17 @@ var builtinFuncs = map[string]any{
 	// Example: <a/b/c|0/1|x_b/c> -> <c|b/c|a/b/c|1|0/1|x_b/c>
 	"suffixes": func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error) {
 		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
-			seen := make(map[string]struct{})
-			seen[""] = struct{}{}
 			for _, s := range choices {
 				sp := util.SplitStringAfterAny(s, delims)
 				for i := len(sp) - 1; i >= 0; i-- {
 					sfx := strings.Join(sp[i:], "")
-					if _, ok := seen[sfx]; ok {
+					if sfx == "" {
 						continue
 					}
 					res = append(res, IrSegmentStr(sfx))
-					seen[sfx] = struct{}{}
 				}
 			}
+			res = builtinHelperDedupeChoiceOfStrings(res)
 			return
 		})
 	},
@@ -176,17 +188,13 @@ var builtinFuncs = map[string]any{
 				return nil, err
 			}
 		}
-		seen := make(map[string]struct{})
 		var res IrSegmentChoice
 		for _, choices := range choices {
 			for _, choice := range choices {
-				s := string(choice.(IrSegmentStr))
-				if _, ok := seen[s]; !ok {
-					res = append(res, choice)
-					seen[s] = struct{}{}
-				}
+				res = append(res, choice)
 			}
 		}
+		res = builtinHelperDedupeChoiceOfStrings(res)
 		return res, nil
 	},
 
