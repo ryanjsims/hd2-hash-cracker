@@ -517,7 +517,7 @@ func generateClCode(s pattern.Segment, bufs *clBuffers) (code []byte) {
 		cIdx := cIdxCounter
 		cIdxCounter++
 
-		if len(segs) == s.Comps[idx] { // List of single strings
+		if len(segs) == s.Comps[idx] { // List of single strings (NOTE that this is only reliable due to the single element flattening optimization)
 			if len(segs) != 1 {
 				cb.L("for (; i[%d] < %d; i[%d]++) {", cIdx, len(segs), cIdx)
 			} else {

@@ -158,7 +158,7 @@ func (idx *SegIdx) Add(s Segment, n int) (carry int) {
 		//fmt.Println(">addToUnion", i, n)
 		//defer func() { fmt.Println("<addToUnion", i, n, carry) }()
 
-		// Fast path: All union operands are single strings
+		// Fast path: All union operands each have a complexity of 1
 		if s.Comps[i] == len(s.Segs[i]) {
 			v := idx.Idxs[i] + n
 			carry = v / s.Comps[i]
@@ -392,6 +392,14 @@ func (s *Segment) optimize() (compChanged bool) {
 			// In this case, we can no longer optimize this segment, so return early
 			return
 		}
+	}
+
+	// Cartesian product only yield one string should be flattened
+	// to that string.
+	if s.Comp == 1 {
+		*s = Segment{Type: SegmentText, Str: s.StringAt(s.MakeIndex()), Comp: 1}
+		// In this case, we can no longer optimize the segment, so return early
+		return
 	}
 
 	// Cartesian product element that only yields empty string can be removed.
