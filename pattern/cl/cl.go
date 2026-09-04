@@ -504,7 +504,7 @@ func generateClCode(s pattern.Segment, bufs *clBuffers) (code []byte) {
 	// as a new guessing function and then make the union guess via that.
 	var genCode func(cb *codeBuilder, s pattern.Segment, idx int, guessFn string)
 	genCode = func(cb *codeBuilder, s pattern.Segment, idx int, guessFn string) {
-		if s.Type == pattern.SegmentText {
+		if (s.Type == pattern.SegmentText) || (s.Type == pattern.SegmentProdOfSets && len(s.Segs) == 0) {
 			cb.L("const u32 str_len = %d;", len(s.Str))
 			writeExprPushStr(cb, "memcpy_pc", quote(s.Str))
 			writeExprCallGuessFn(cb, guessFn)
