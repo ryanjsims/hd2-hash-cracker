@@ -75,17 +75,21 @@ loop:
 		c.mu.Unlock()
 
 		rateStr := "???"
+		etaStr := "???"
 		if c.triesPerSecondBuf.Len() != 0 {
 			// Average the buffer values
 			a, b := c.triesPerSecondBuf.PeekAll()
 			rate := (util.Sum(a) + util.Sum(b)) / float64(c.triesPerSecondBuf.Len())
 			rateStr = fmt.Sprintf("%.2fMH/s", rate/1e6)
+
+			eta := time.Duration(float64(time.Second) * float64((prog.Comp - tries)) / float64(rate))
+			etaStr = eta.Round(time.Second).String()
 		}
 		extraStatus := c.extraStatusStr
 		if extraStatus != "" {
 			extraStatus = ", " + extraStatus
 		}
-		cli.Status("Progress=%.3f%%, Rate=%s, Last=%q%s", float64(tries)/float64(prog.Comp)*100, rateStr, lastStr, extraStatus)
+		cli.Status("Progress=%.3f%% (ETA %s), Rate=%s, Last=%q%s", float64(tries)/float64(prog.Comp)*100, etaStr, rateStr, lastStr, extraStatus)
 
 		for c.triesPerSecondBuf.Len() > 20 {
 			c.triesPerSecondBuf.Read()
