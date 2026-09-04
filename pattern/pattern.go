@@ -251,6 +251,19 @@ func (s Segment) String() string {
 	}
 }
 
+func (s *Segment) resetComps() {
+	if s.Comps == nil {
+		return
+	}
+	for i := range s.Segs {
+		for j := range s.Segs[i] {
+			s.Segs[i][j].resetComps()
+		}
+	}
+	s.Comp = 0
+	s.Comps = nil
+}
+
 func (s *Segment) calculateComps() {
 	if s.Type == SegmentText {
 		s.Comp = 1
@@ -259,7 +272,11 @@ func (s *Segment) calculateComps() {
 	if s.Comps != nil {
 		return
 	}
-	s.Comps = make([]int, len(s.Segs))
+	if len(s.Segs) != 0 {
+		s.Comps = make([]int, len(s.Segs))
+	} else {
+		s.Comps = nil
+	}
 	prod := 1
 	for i := range s.Segs {
 		sum := 0
@@ -348,34 +365,57 @@ func (s Segment) MaxLen() int {
 	return concatLen
 }
 
-func (s *Segment) optimize() {
+// Reduces nesting and removes unnecessary operands.
+// May decrease complexity in the process (returns whether
+// complexity was actually changed).
+func (s *Segment) optimize() (compChanged bool) {
 	// Optimize inner segments first.
 	for i := range s.Segs {
 		for j := range s.Segs[i] {
-			s.Segs[i][j].optimize()
+			if s.Segs[i][j].optimize() {
+				s.Comps = nil
+				s.Comp = 0
+				s.calculateComps()
+				compChanged = true
+			}
 		}
 	}
 
-	// Empty cartesian products or union elements can
-	// be removed.
-	if i := slices.IndexFunc(s.Segs, func(segs []Segment) bool {
-		return len(segs) == 0
-	}); i != -1 {
+	// Union element that only yields empty string should be replaced with empty segment
+	// (to fully flatten any nested empty strings).
+	{
+		prevComp := s.Comp
+		if s.MaxLen() == 0 {
+			*s = Segment{Type: SegmentProdOfSets, Comp: 1}
+			// e.g. <><|> becomes <> (remove redundant complexity)
+			compChanged = compChanged || s.Comp != prevComp
+			// In this case, we can no longer optimize this segment, so return early
+			return
+		}
+	}
+
+	// Cartesian product element that only yields empty string can be removed.
+	cartProdElementMaxLen := func(s Segment, idx int) int {
+		maxLen := 0
+		for _, seg := range s.Segs[idx] {
+			maxLen = max(maxLen, seg.MaxLen())
+		}
+		return maxLen
+	}
+	{
+		prevComp := s.Comp
 		var newSegs [][]Segment
-		var newComps []int
-		for ; i < len(s.Segs); i++ {
-			if len(s.Segs[i]) != 0 {
+		for i := range s.Segs {
+			if cartProdElementMaxLen(*s, i) > 0 {
 				newSegs = append(newSegs, s.Segs[i])
-				newComps = append(newComps, s.Comps[i])
 			}
 		}
 		s.Segs = newSegs
-		s.Comps = newComps
-	}
-	for i := range s.Segs {
-		s.Segs[i] = slices.DeleteFunc(s.Segs[i], func(s Segment) bool {
-			return s.Type == SegmentProdOfSets && len(s.Segs) == 0
-		})
+		// Complexity may have changed if expression was e.g. <|>
+		// (redundant empty string).
+		s.resetComps()
+		s.calculateComps()
+		compChanged = compChanged || s.Comp != prevComp
 	}
 
 	// Cartesian product of single-parameter unions
@@ -410,6 +450,8 @@ func (s *Segment) optimize() {
 	if len(s.Segs) == 1 && len(s.Segs[0]) == 1 {
 		*s = s.Segs[0][0]
 	}
+
+	return
 }
 
 func compile(irSeg IrSegment, opts CompileOptions) Segment {

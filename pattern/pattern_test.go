@@ -138,19 +138,76 @@ func TestCompile(t *testing.T) {
 			Segment{
 				Type: SegmentProdOfSets,
 				Segs: [][]Segment{
-					{
-						{Type: SegmentText, Str: "c", Comp: 1},
-					},
+					{{Type: SegmentText, Str: "c", Comp: 1}},
 					{
 						{Type: SegmentText, Str: "a", Comp: 1},
 						{Type: SegmentText, Str: "b", Comp: 1},
 					},
-					{
-						{Type: SegmentText, Str: "d", Comp: 1},
-					},
+					{{Type: SegmentText, Str: "d", Comp: 1}},
 				},
 				Comp:  2,
 				Comps: []int{1, 2, 1},
+			}, "",
+		},
+		{"or empty", "a|",
+			CompileOptions{},
+			Segment{
+				Type: SegmentProdOfSets,
+				Segs: [][]Segment{{
+					{Type: SegmentText, Str: "a", Comp: 1},
+					{Type: SegmentProdOfSets, Comp: 1},
+				}},
+				Comp:  2,
+				Comps: []int{2},
+			}, "",
+		},
+		{"range 0,1", "a{0,1}",
+			CompileOptions{},
+			Segment{
+				Type: SegmentProdOfSets,
+				Segs: [][]Segment{{
+					{Type: SegmentProdOfSets, Comp: 1},
+					{Type: SegmentText, Str: "a", Comp: 1},
+				}},
+				Comp:  2,
+				Comps: []int{2},
+			}, "",
+		},
+		{"optimize empty 1", "a<>b",
+			CompileOptions{},
+			Segment{
+				Type: SegmentProdOfSets,
+				Segs: [][]Segment{
+					{{Type: SegmentText, Str: "a", Comp: 1}},
+					{{Type: SegmentText, Str: "b", Comp: 1}},
+				},
+				Comp:  1,
+				Comps: []int{1, 1},
+			}, "",
+		},
+		{"optimize empty 2", "a<|<>>b",
+			CompileOptions{},
+			Segment{
+				Type: SegmentProdOfSets,
+				Segs: [][]Segment{
+					{{Type: SegmentText, Str: "a", Comp: 1}},
+					{{Type: SegmentText, Str: "b", Comp: 1}},
+				},
+				Comp:  1,
+				Comps: []int{1, 1},
+			}, "",
+		},
+		{"optimize empty 3", "a|b|<>",
+			CompileOptions{},
+			Segment{
+				Type: SegmentProdOfSets,
+				Segs: [][]Segment{{
+					{Type: SegmentText, Str: "a", Comp: 1},
+					{Type: SegmentText, Str: "b", Comp: 1},
+					{Type: SegmentProdOfSets, Comp: 1},
+				}},
+				Comp:  3,
+				Comps: []int{3},
 			}, "",
 		},
 	}
@@ -163,7 +220,7 @@ func TestCompile(t *testing.T) {
 			} else {
 				require.EqualError(err, c.wantErr)
 			}
-			require.Equal(c.want, prog)
+			require.Equal(c.want, prog, "compiled program not equal: want %s, but got %s", c.want, prog)
 		})
 	}
 }
