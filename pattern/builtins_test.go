@@ -1,6 +1,7 @@
 package pattern
 
 import (
+	"reflect"
 	"slices"
 	"testing"
 
@@ -11,46 +12,56 @@ func TestBuiltins(t *testing.T) {
 	choice := func(s ...string) IrSegmentChoice {
 		return ChoiceFromStrings(slices.Values(s))
 	}
-	t.Run("limit", func(t *testing.T) {
-		require := require.New(t)
-		fn := builtinFuncs["limit"].(func(s IrSegmentChoice, n string) (IrSegmentChoice, error))
-		res, err := fn(choice("a", "b", "c"), "2")
-		require.NoError(err)
-		require.Equal(choice("a", "b"), res)
-	})
-	t.Run("filter", func(t *testing.T) {
-		require := require.New(t)
-		fn := builtinFuncs["filter"].(func(choices IrSegmentChoice, re string) (IrSegmentChoice, error))
-		res, err := fn(choice("a", "b", "1", "2"), `\d+`)
-		require.NoError(err)
-		require.Equal(choice("1", "2"), res)
-	})
-	t.Run("remove", func(t *testing.T) {
-		require := require.New(t)
-		fn := builtinFuncs["remove"].(func(choices IrSegmentChoice, re string) (IrSegmentChoice, error))
-		res, err := fn(choice("a", "b", "1", "2"), `\d+`)
-		require.NoError(err)
-		require.Equal(choice("a", "b"), res)
-	})
-	t.Run("split", func(t *testing.T) {
-		require := require.New(t)
-		fn := builtinFuncs["split"].(func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error))
-		res, err := fn(choice("a_b", "c:d_e:b"), "_:")
-		require.NoError(err)
-		require.Equal(choice("a", "b", "c", "d", "e"), res)
-	})
-	t.Run("prefixes", func(t *testing.T) {
-		require := require.New(t)
-		fn := builtinFuncs["prefixes"].(func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error))
-		res, err := fn(choice("a/b/c", "0/1", "a/b_d", "_x"), "/_")
-		require.NoError(err)
-		require.Equal(choice("a", "a/b", "a/b/c", "0", "0/1", "a/b_d", "_x"), res)
-	})
-	t.Run("suffixes", func(t *testing.T) {
-		require := require.New(t)
-		fn := builtinFuncs["suffixes"].(func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error))
-		res, err := fn(choice("a/b/c", "0/1", "a/b_d", "y/"), "/_")
-		require.NoError(err)
-		require.Equal(choice("c", "b/c", "a/b/c", "1", "0/1", "d", "b_d", "a/b_d", "y/"), res)
-	})
+	testCases := []struct {
+		testName    string
+		builtinName string
+		args        []any
+		want        IrSegment
+	}{
+		{"limit", "limit",
+			[]any{choice("a", "b", "c"), "2"},
+			choice("a", "b")},
+		{"filter", "filter",
+			[]any{choice("a", "b", "1", "2"), `\d+`},
+			choice("1", "2")},
+		{"remove", "remove",
+			[]any{choice("a", "b", "1", "2"), `\d+`},
+			choice("a", "b")},
+		{"split", "split",
+			[]any{choice("a_b", "c:d_e:b"), "_:"},
+			choice("a", "b", "c", "d", "e")},
+		{"prefixes", "prefixes",
+			[]any{choice("a/b/c", "0/1", "a/b_d", "_x"), "/_"},
+			choice("a", "a/b", "a/b/c", "0", "0/1", "a/b_d", "_x")},
+		{"suffixes", "suffixes",
+			[]any{choice("a/b/c", "0/1", "a/b_d", "y/"), "/_"},
+			choice("c", "b/c", "a/b/c", "1", "0/1", "d", "b_d", "a/b_d", "y/")},
+		{"merge", "merge",
+			[]any{choice("a", "b", "c"), choice("c", "b", "x")},
+			choice("a", "b", "c", "x")},
+		{"merge_2", "merge",
+			[]any{choice("a", "b", "c", "d"), choice("c", "b", "xx"), choice("xx", "yy", "zz")},
+			choice("a", "b", "c", "d", "xx", "yy", "zz")},
+	}
+	for _, c := range testCases {
+		rArgs := make([]reflect.Value, len(c.args))
+		for i := range c.args {
+			rArgs[i] = reflect.ValueOf(c.args[i])
+		}
+
+		fn := reflect.ValueOf(builtinFuncs[c.builtinName])
+
+		t.Run(c.testName, func(t *testing.T) {
+			require := require.New(t)
+			res := fn.Call(rArgs)
+			if len(res) > 0 {
+				require.Equal(2, len(res))
+				require.True(res[1].Type().Implements(reflect.TypeFor[error]()), "2nd return type must implement error")
+				if !res[1].IsNil() {
+					require.NoError(res[1].Interface().(error))
+				}
+			}
+			require.Equal(res[0].Interface(), c.want)
+		})
+	}
 }

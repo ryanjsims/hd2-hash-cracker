@@ -12,10 +12,7 @@ import (
 
 var builtinVars = map[string]IrSegment{}
 
-func builtinHelperTransformChoiceOfStrings(
-	choices IrSegmentChoice,
-	transform func(choices iter.Seq2[int, string]) (res []IrSegment, err error),
-) (IrSegmentChoice, error) {
+func builtinHelperCheckChoiceOfStrings(choices IrSegmentChoice) error {
 	prevStr := ""
 	for i, seg := range choices {
 		s, ok := seg.(IrSegmentStr)
@@ -24,9 +21,19 @@ func builtinHelperTransformChoiceOfStrings(
 			if i > 0 {
 				sfx = fmt.Sprintf(" (after %q)", prevStr)
 			}
-			return nil, fmt.Errorf("expected choice to consist only of strings, but got non-string at index %d%s", i, sfx)
+			return fmt.Errorf("expected choice to consist only of strings, but got non-string at index %d%s", i, sfx)
 		}
 		prevStr = string(s)
+	}
+	return nil
+}
+
+func builtinHelperTransformChoiceOfStrings(
+	choices IrSegmentChoice,
+	transform func(choices iter.Seq2[int, string]) (res []IrSegment, err error),
+) (IrSegmentChoice, error) {
+	if err := builtinHelperCheckChoiceOfStrings(choices); err != nil {
+		return nil, err
 	}
 	newChoices, err := transform(func(yield func(int, string) bool) {
 		for i, seg := range choices {
@@ -147,6 +154,26 @@ var builtinFuncs = map[string]any{
 			}
 			return
 		})
+	},
+	// merges lists of choices of strings, while leaving out any duplicates.
+	"merge": func(choices ...IrSegmentChoice) (IrSegmentChoice, error) {
+		for _, choices := range choices {
+			if err := builtinHelperCheckChoiceOfStrings(choices); err != nil {
+				return nil, err
+			}
+		}
+		seen := make(map[string]struct{})
+		var res IrSegmentChoice
+		for _, choices := range choices {
+			for _, choice := range choices {
+				s := string(choice.(IrSegmentStr))
+				if _, ok := seen[s]; !ok {
+					res = append(res, choice)
+					seen[s] = struct{}{}
+				}
+			}
+		}
+		return res, nil
 	},
 
 	// =====================
