@@ -5,6 +5,7 @@ import (
 	"iter"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/xypwn/hd2-hash-cracker/util"
 )
@@ -97,6 +98,51 @@ var builtinFuncs = map[string]any{
 					}
 					seen[s] = struct{}{}
 					res = append(res, IrSegmentStr(s))
+				}
+			}
+			return
+		})
+	},
+	// returns a list of non-empty deduplicated prefixes of the input up to any of delims.
+	//
+	// Example: <a/b/c|0/1|a/b_d> -> <a|a/b|a/b/c|0|0/1|a/b_d>
+	"prefixes": func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error) {
+		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
+			seen := make(map[string]struct{})
+			seen[""] = struct{}{}
+			for _, s := range choices {
+				sp := util.SplitStringAfterAny(s, delims)
+				for i := 1; i <= len(sp); i++ {
+					pfx := strings.Join(sp[:i], "")
+					if len(pfx) > 0 && strings.ContainsRune(delims, rune(pfx[len(pfx)-1])) {
+						pfx = pfx[:len(pfx)-1]
+					}
+					if _, ok := seen[pfx]; ok {
+						continue
+					}
+					res = append(res, IrSegmentStr(pfx))
+					seen[pfx] = struct{}{}
+				}
+			}
+			return
+		})
+	},
+	// returns a list of non-empty deduplicated suffixes of the input up to any of delims.
+	//
+	// Example: <a/b/c|0/1|x_b/c> -> <c|b/c|a/b/c|1|0/1|x_b/c>
+	"suffixes": func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error) {
+		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
+			seen := make(map[string]struct{})
+			seen[""] = struct{}{}
+			for _, s := range choices {
+				sp := util.SplitStringAfterAny(s, delims)
+				for i := len(sp) - 1; i >= 0; i-- {
+					sfx := strings.Join(sp[i:], "")
+					if _, ok := seen[sfx]; ok {
+						continue
+					}
+					res = append(res, IrSegmentStr(sfx))
+					seen[sfx] = struct{}{}
 				}
 			}
 			return

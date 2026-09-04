@@ -35,8 +35,22 @@ func TestBuiltins(t *testing.T) {
 	t.Run("split", func(t *testing.T) {
 		require := require.New(t)
 		fn := builtinFuncs["split"].(func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error))
-		res, err := fn(choice("a_b", "c:d_e:b"), `_:`)
+		res, err := fn(choice("a_b", "c:d_e:b"), "_:")
 		require.NoError(err)
 		require.Equal(choice("a", "b", "c", "d", "e"), res)
+	})
+	t.Run("prefixes", func(t *testing.T) {
+		require := require.New(t)
+		fn := builtinFuncs["prefixes"].(func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error))
+		res, err := fn(choice("a/b/c", "0/1", "a/b_d", "_x"), "/_")
+		require.NoError(err)
+		require.Equal(choice("a", "a/b", "a/b/c", "0", "0/1", "a/b_d", "_x"), res)
+	})
+	t.Run("suffixes", func(t *testing.T) {
+		require := require.New(t)
+		fn := builtinFuncs["suffixes"].(func(choices IrSegmentChoice, delims string) (IrSegmentChoice, error))
+		res, err := fn(choice("a/b/c", "0/1", "a/b_d", "y/"), "/_")
+		require.NoError(err)
+		require.Equal(choice("c", "b/c", "a/b/c", "1", "0/1", "d", "b_d", "a/b_d", "y/"), res)
 	})
 }

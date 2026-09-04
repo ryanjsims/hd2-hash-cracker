@@ -37,6 +37,8 @@ Fast GPU-based hash cracking for Helldivers 2, optimized for file paths.
 - `#{limit x n}`: limit the or expression `x` to the first `n` elements
 - `#{filter x regex}`: filter the or expression `x` to only the elements that match `regex`
 - `#{remove x regex}`: like `filter`, but keeps the elements that *don't* match `regex`
+- `#{prefixes x delims}`: collect all prefixes of `x`, split by any of `delims` and deduplicate (e.g. `#{prefixes <a/b/c|a/b_d> _/}` -> `<a|a/b|a/b/c|a/b_d>`)
+- `#{suffixes x delims}`: collect all suffixes of `x`, split by any of `delims` and deduplicate (e.g. `#{prefixes <a/b/c|x_b/c> _/}` -> `<c|b/c|a/b/c|x_b/c>`)
 
 ### Examples
 - `content/#{known-words}{1,3,[_:]}`: `content/` followed by 1-3 known words, separated by `_` or `:`
