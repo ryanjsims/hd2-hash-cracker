@@ -79,11 +79,11 @@ var builtinFuncs = map[string]any{
 		}
 		return s, nil
 	},
-	// filter only keeps the choices that fully match the given regex.
+	// filter only keeps items that match the given regex.
 	//
 	// All choices must be strings.
 	"filter": func(choices IrSegmentChoice, re string) (IrSegmentChoice, error) {
-		r, err := regexp.Compile("^" + re + "$") // HACK
+		r, err := regexp.Compile(re)
 		if err != nil {
 			return nil, err
 		}
@@ -96,9 +96,9 @@ var builtinFuncs = map[string]any{
 			return
 		})
 	},
-	// Like filter, but removes all choices that fully match the given regex.
+	// Like filter, but REMOVES all choices that match the given regex.
 	"remove": func(choices IrSegmentChoice, re string) (IrSegmentChoice, error) {
-		r, err := regexp.Compile("^" + re + "$") // HACK
+		r, err := regexp.Compile(re)
 		if err != nil {
 			return nil, err
 		}
