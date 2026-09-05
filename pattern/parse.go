@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"maps"
 	"math"
+	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -544,9 +545,9 @@ func (p *parser) parseHashExpr() IrSegment {
 			if p.fs == nil {
 				funcCallErr(errors.New("file loading not available if fs is not passed"))
 			}
-			dir := filepath.Dir(p.filename)
-			filename := args[0].(string)
-			data, err := fs.ReadFile(p.fs, filepath.Join(dir, filename))
+			dir := path.Dir(p.filename)
+			filename := filepath.ToSlash(args[0].(string))
+			data, err := fs.ReadFile(p.fs, path.Join(dir, filename))
 			if err != nil {
 				funcCallErr(err)
 			}
@@ -810,7 +811,7 @@ func parse(src []byte, filename string, fs fs.FS, extraVars map[string]IrSegment
 	p = &parser{
 		src:          src,
 		lineOffsets:  lineOffsets,
-		filename:     filename,
+		filename:     filepath.ToSlash(filename),
 		fs:           fs,
 		initialFuncs: make(map[string]any),
 		initialVars:  make(map[string]IrSegment),
