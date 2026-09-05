@@ -261,7 +261,7 @@ func (c *Cracker) Dispatch() (matches []string, err error) {
 			// We only need to read back additional data if a match was found;
 			// if no match was found, we always know that all tries were
 			// exhausted and matchLens is zero everywhere.
-			if err := c.bufs.readTriesAndMatches(c.queue); err != nil {
+			if err := c.bufs.readTriesIdxsAndMatches(c.queue); err != nil {
 				return nil, fmt.Errorf("reading back data: %w", err)
 			}
 

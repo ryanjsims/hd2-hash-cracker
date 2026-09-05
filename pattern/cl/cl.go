@@ -1,6 +1,7 @@
 package cl
 
 import (
+	"bytes"
 	_ "embed"
 	"fmt"
 	"math"
@@ -346,8 +347,11 @@ func (b *clBuffers) readMatchFound(queue cl.CommandQueue) (err error) {
 	return b.bs.matchFound.EnqueueRead(queue, true, 0, -1, nil, nil)
 }
 
-func (b *clBuffers) readTriesAndMatches(queue cl.CommandQueue) (err error) {
+func (b *clBuffers) readTriesIdxsAndMatches(queue cl.CommandQueue) (err error) {
 	if err = b.bs.tries.EnqueueRead(queue, false, 0, -1, nil, nil); err != nil {
+		return
+	}
+	if err = b.bs.idxs.EnqueueRead(queue, false, 0, -1, nil, nil); err != nil {
 		return
 	}
 	if err = b.bs.matches.EnqueueRead(queue, false, 0, -1, nil, nil); err != nil {
@@ -392,16 +396,16 @@ func (b *clBuffers) write(queue cl.CommandQueue, triesFillValue uint32, zeroMatc
 
 // Gets the match strings from host buffer data.
 func (b *clBuffers) getMatches() (matches []string) {
-	var s strings.Builder
+	var buf bytes.Buffer
 	for i := range b.numWorkers {
 		offs := i * b.matchBufLen
 		for j := range int(b.bs.matchesLens.Items[i]) {
 			c := b.bs.matches.Items[offs+j]
 			if c != 0 {
-				s.WriteByte(c)
+				buf.WriteByte(c)
 			} else {
-				matches = append(matches, strings.Clone(s.String()))
-				s.Reset()
+				matches = append(matches, buf.String())
+				buf.Reset()
 			}
 		}
 	}
@@ -546,12 +550,13 @@ func generateClCode(s pattern.Segment, bufs *clBuffers) (code []byte) {
 			}
 			cb.L("switch (i[%d]) {", cIdx)
 			for j, seg := range segs {
-				cb.L("case %d:", j)
+				cb.L("case %d: {", j)
 				genCode(cb, seg, 0, fname)
 				if j != len(segs)-1 {
 					cb.L("i[%d]++;", cIdx)
 					cb.L("//fallthrough")
 				}
+				cb.L("}")
 			}
 			cb.L("}")
 		}

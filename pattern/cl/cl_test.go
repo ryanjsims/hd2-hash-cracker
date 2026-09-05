@@ -14,7 +14,7 @@ import (
 
 func TestCl(t *testing.T) {
 	require := require.New(t)
-	prog, err := pattern.Compile([]byte("<a|b|c|d|e|f|g|h|i|j>{1,6}"), "", nil, pattern.CompileOptions{})
+	prog, err := pattern.Compile([]byte("<a|b|c|d|e|f|g|h|i|j>{3}"), "", nil, pattern.CompileOptions{})
 	require.NoError(err)
 
 	runtime.LockOSThread()
@@ -34,15 +34,19 @@ func TestCl(t *testing.T) {
 	device := devices[0]
 
 	targetHashes := []uint64{
-		hash.Murmur64aSum("aba"),
-		hash.Murmur64aSum("aaaa"),
-		hash.Murmur64aSum("aaaaa"),
-		hash.Murmur64aSum("aaaaaa"),
-		hash.Murmur64aSum("abcdef"),
+		hash.Murmur64aSum("aaa"),
+		hash.Murmur64aSum("aab"),
+		hash.Murmur64aSum("aac"),
+		hash.Murmur64aSum("aad"),
+		hash.Murmur64aSum("hij"),
 	}
 
 	var allMatches []string
-	cr, err := pcl.NewCracker(device, prog, pcl.HashMurmur64a, targetHashes, pcl.Options{})
+	cr, err := pcl.NewCracker(device, prog, pcl.HashMurmur64a, targetHashes, pcl.Options{
+		Workers:        16,
+		MinMatchBufLen: 1, // We want to test the case where the match buffer is filled up fully
+		Tries:          32,
+	})
 	require.NoError(err)
 	defer cr.Delete()
 	for {
@@ -54,6 +58,12 @@ func TestCl(t *testing.T) {
 		require.NoError(err)
 		allMatches = append(allMatches, matches...)
 	}
-	require.Equal([]string{"aba", "aaaa", "aaaaa", "aaaaaa", "abcdef"}, allMatches)
+	require.Equal([]string{
+		"aaa",
+		"aab",
+		"aac",
+		"aad",
+		"hij",
+	}, allMatches)
 	//fmt.Println(allMatches)
 }

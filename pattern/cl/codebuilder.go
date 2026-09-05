@@ -15,7 +15,7 @@ type codeBuilder struct {
 
 func (cb *codeBuilder) line(format string, text []byte) {
 	extraUnind := 0
-	if strings.HasPrefix(format, "case ") || strings.HasSuffix(format, ":") {
+	if !strings.ContainsAny(format, "{}") && (strings.HasPrefix(format, "case ") || strings.HasSuffix(format, ":")) {
 		extraUnind++
 	}
 	if format != "" {

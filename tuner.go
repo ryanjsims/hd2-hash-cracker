@@ -50,6 +50,13 @@ func NewTuner(workers, tries int) *Tuner {
 	}
 }
 
+// Tuner that does nothing. Useful for debugging.
+func NewDummyTuner() *Tuner {
+	return &Tuner{
+		done: true,
+	}
+}
+
 // Other return values are only valid if changed is true.
 func (t *Tuner) Step(kernelRunDurationNs int, totalHashesTried int) (newNumWorkers, newNumTries int, done, changed bool) {
 	if t.remainingWarmupNs > 0 {

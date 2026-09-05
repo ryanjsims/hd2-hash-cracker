@@ -153,8 +153,9 @@ bool try(const u64 *s, u32 n, const size_t id, __global const u32 *hash_bitmap, 
   if (!binary_search(h, target_hashes)) return true;
   if (matches_lens[id]+n+1 > MAX_MATCH_BUF_LEN)
     return false;
-  memcpy_gp(matches + id*MAX_MATCH_BUF_LEN + matches_lens[id], s, n);
-  matches_lens[id] += n;
-  matches[id*MAX_MATCH_BUF_LEN + matches_lens[id]++] = 0;
+  __global char *m = matches + id*MAX_MATCH_BUF_LEN + matches_lens[id];
+  memcpy_gp(m, s, n);
+  m[n] = 0;
+  matches_lens[id] += n+1;
   return true;
 }
