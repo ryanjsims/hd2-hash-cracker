@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"os/signal"
@@ -36,8 +37,7 @@ type cracker struct {
 	mu sync.Mutex
 	// Guarded by mu //
 	msgBuf            []string
-	newHashes         []string // newly cracked hashes
-	newUniqueHashes   map[string]struct{}
+	newHashes         map[string]struct{} // newly cracked hashes
 	lastStr           string
 	extraStatusStr    string
 	triesCnt          int
@@ -47,8 +47,8 @@ type cracker struct {
 
 func runCracker(ctx context.Context, patternSrc []byte, patternFilename string, patternFs fs.FS, mode pcl.HashMode, targetHashes []uint64, writeClCode bool) (newHashes []string, err error) {
 	c := &cracker{
-		ctx:             ctx,
-		newUniqueHashes: make(map[string]struct{}),
+		ctx:       ctx,
+		newHashes: make(map[string]struct{}),
 	}
 
 	prog, err := pattern.Compile(patternSrc, patternFilename, patternFs, pattern.CompileOptions{
@@ -120,7 +120,7 @@ loop:
 	if err := workerErr; err != nil {
 		return nil, err
 	}
-	return c.newHashes, nil
+	return slices.Sorted(maps.Keys(c.newHashes)), nil
 }
 
 func (c *cracker) Msg(format string, args ...any) {
@@ -205,6 +205,12 @@ func crack(c *cracker, prog pattern.Segment, mode pcl.HashMode, targetHashes []u
 		}
 
 		for _, s := range matches {
+			c.mu.Lock()
+			_, wasntNew := c.newHashes[s]
+			c.mu.Unlock()
+			if wasntNew {
+				continue
+			}
 			var hashHex string
 			switch mode {
 			case pcl.HashMurmur64a:
@@ -215,6 +221,9 @@ func crack(c *cracker, prog pattern.Segment, mode pcl.HashMode, targetHashes []u
 				hashHex = fmt.Sprintf("%08x", hash.DatalibHashSum(s))
 			}
 			c.Msg("found: %s = %s", hashHex, s)
+			c.mu.Lock()
+			c.newHashes[s] = struct{}{}
+			c.mu.Unlock()
 		}
 
 		now := time.Now()
@@ -231,16 +240,12 @@ func crack(c *cracker, prog pattern.Segment, mode pcl.HashMode, targetHashes []u
 		}
 
 		c.mu.Lock()
-		c.newHashes = append(c.newHashes, matches...)
-		for _, h := range matches {
-			c.newUniqueHashes[h] = struct{}{}
-		}
 		c.triesCnt += newTries
 		c.lastStr = lastStr
 		if triesPerSecond >= 0 {
 			c.triesPerSecondBuf.Write(triesPerSecond)
 		}
-		allFound := len(c.newUniqueHashes) == len(targetHashes)
+		allFound := len(c.newHashes) == len(targetHashes)
 		c.mu.Unlock()
 
 		if w, t, done, changed := tuner.Step(int(cr.LastKernelRunDuration().Nanoseconds()), newTries); changed {
