@@ -140,6 +140,42 @@ var builtinFuncs = map[string]any{
 			return
 		})
 	},
+	// For each item, remove the first n characters of the string
+	"trim-start": func(choices IrSegmentChoice, n string) (IrSegmentChoice, error) {
+		nInt, err := strconv.Atoi(n)
+		if err != nil {
+			return nil, err
+		}
+		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
+			for _, s := range choices {
+				if len(s) <= nInt || nInt < 0 {
+					continue
+				}
+				s := s[nInt:]
+				res = append(res, IrSegmentStr(s))
+			}
+			res = builtinHelperDedupeChoiceOfStrings(res)
+			return
+		})
+	},
+	// For each item, remove the last n characters of the string
+	"trim-end": func(choices IrSegmentChoice, n string) (IrSegmentChoice, error) {
+		nInt, err := strconv.Atoi(n)
+		if err != nil {
+			return nil, err
+		}
+		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
+			for _, s := range choices {
+				if len(s) <= nInt {
+					continue
+				}
+				s := s[:len(s)-nInt]
+				res = append(res, IrSegmentStr(s))
+			}
+			res = builtinHelperDedupeChoiceOfStrings(res)
+			return
+		})
+	},
 	// For each item, dup duplicates the string n times, inserting the given separator.
 	// eg `#{dup <a|b|c> 2 /} -> <a/a|b/b|c/c>`
 	"dup": func(choices IrSegmentChoice, n, sep string) (IrSegmentChoice, error) {
