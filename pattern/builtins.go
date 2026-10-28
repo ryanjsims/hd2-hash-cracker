@@ -176,6 +176,26 @@ var builtinFuncs = map[string]any{
 			return
 		})
 	},
+	// Prepend a string to each string in the choices, returning a choice
+	"prepend": func(choices IrSegmentChoice, prefix string) (IrSegmentChoice, error) {
+		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
+			for _, s := range choices {
+				res = append(res, IrSegmentStr(prefix+s))
+			}
+			res = builtinHelperDedupeChoiceOfStrings(res)
+			return
+		})
+	},
+	// Append a string to each string in the choices, returning a choice
+	"append": func(choices IrSegmentChoice, suffix string) (IrSegmentChoice, error) {
+		return builtinHelperTransformChoiceOfStrings(choices, func(choices iter.Seq2[int, string]) (res []IrSegment, err error) {
+			for _, s := range choices {
+				res = append(res, IrSegmentStr(s+suffix))
+			}
+			res = builtinHelperDedupeChoiceOfStrings(res)
+			return
+		})
+	},
 	// For each item, dup duplicates the string n times, inserting the given separator.
 	// eg `#{dup <a|b|c> 2 /} -> <a/a|b/b|c/c>`
 	"dup": func(choices IrSegmentChoice, n, sep string) (IrSegmentChoice, error) {
